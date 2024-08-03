@@ -2,11 +2,16 @@
 #include <stddef.h>
 
 #include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
 #include <libavcodec/codec.h>
 #include <libavcodec/packet.h>
 #include <libavutil/frame.h>
 
 #include <libavutil/avutil.h>
+#include <libavutil/error.h>
+
+int codec_open_stream_decoder(AVCodecContext **const decoder,
+                              AVStream        *const stream);
 
 int file_read_from_stream(AVFormatContext *const file,
                           AVStream        *const stream,
@@ -27,6 +32,7 @@ int main(int const argc, char const *const argv[])
     AVFrame         * in_frm  = NULL;
 
     AVStream        * in_audio = NULL;
+    AVCodecContext  * in_audio_decoder = NULL;
 
     int error = 0;
 
@@ -44,6 +50,9 @@ int main(int const argc, char const *const argv[])
                                                  AVMEDIA_TYPE_AUDIO);
     if (error < 0) goto frame_destroy;
 
+    error = codec_open_stream_decoder(&in_audio_decoder, in_audio);
+    if (error < 0) goto frame_destroy;
+
     while (1)
     {
         error = file_read_from_stream(in_file, in_audio, in_pkt); 
@@ -57,6 +66,9 @@ int main(int const argc, char const *const argv[])
         av_packet_unref(in_pkt);
     }
 
+    codec_close_decoder:
+        avcodec_free_context(&in_audio_decoder);
+
     frame_destroy:
         av_frame_free(&in_frm);
 
@@ -68,6 +80,37 @@ int main(int const argc, char const *const argv[])
         avformat_close_input(&in_file);
 
     return error < 0 ? 1 : 0;
+}
+
+int codec_open_stream_decoder(AVCodecContext **const decoder,
+                              AVStream        *const stream)
+{
+    AVCodec const * codec = NULL;
+    AVCodecContext * out  = NULL;
+
+    int error = 0;
+
+    codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (NULL == codec) return -1;
+
+    out = avcodec_alloc_context3(codec);
+    if (NULL == out) return -1;
+
+    error = avcodec_parameters_to_context(out, stream->codecpar);
+    if (error < 0) goto codec_destroy_context;
+
+    error = avcodec_open2(out, codec, NULL);
+    if (error < 0) goto codec_destroy_context;
+
+    out->pkt_timebase = stream->time_base;
+    *decoder = out;
+
+    return 0;
+
+    codec_destroy_context:
+        avcodec_free_context(&out);
+
+    return -1;
 }
 
 int frame_create(AVFrame **const frame)
