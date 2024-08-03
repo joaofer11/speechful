@@ -1,13 +1,13 @@
 #include "file.h"
 
-int file_find_first_stream_by_media_type(AVFormatContext *const myctx,
+int file_find_first_stream_by_media_type(AVFormatContext *const ctx,
                                          AVStream       **const stream,
                                          enum AVMediaType const media_type)
 {
-    for (size_t i = 0; i < myctx->nb_streams; ++i)
+    for (size_t i = 0; i < ctx->nb_streams; ++i)
     {
-        if (media_type == myctx->streams[i]->codecpar->codec_type) {
-            *stream = myctx->streams[i];
+        if (media_type == ctx->streams[i]->codecpar->codec_type) {
+            *stream = ctx->streams[i];
             return 0;
         }
     }
@@ -15,14 +15,14 @@ int file_find_first_stream_by_media_type(AVFormatContext *const myctx,
     return -1;
 }
 
-int file_read_from_stream(AVFormatContext *const myctx,
-                          AVStream        *const stream,
-                          AVPacket        *const packet)
+int file_read_stream(AVFormatContext *const ctx,
+                     AVStream        *const stream,
+                     AVPacket        *const packet)
 {
     int error = 0;
     while (1)
     {
-        error = av_read_frame(myctx, packet);
+        error = av_read_frame(ctx, packet);
         if (error < 0) return -1;
 
         if (packet->stream_index == stream->index) return 0;
@@ -31,7 +31,7 @@ int file_read_from_stream(AVFormatContext *const myctx,
     }
 }
 
-int file_open_read_context(AVFormatContext **const myctx,
+int file_open_read_context(AVFormatContext **const ctx,
                            char const *const       filepath)
 {
     AVFormatContext * out = NULL;
@@ -46,6 +46,6 @@ int file_open_read_context(AVFormatContext **const myctx,
         return -1;
     }
 
-    *myctx = out;
+    *ctx = out;
     return 0;
 }

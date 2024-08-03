@@ -6,15 +6,15 @@
 #include <libavutil/frame.h>
 #include <libavutil/avutil.h>
 
-int file_find_first_stream_by_media_type(AVFormatContext *const myctx,
+int file_find_first_stream_by_media_type(AVFormatContext *const ctx,
                                          AVStream       **const stream,
                                          enum AVMediaType const media_type);
 
-int file_read_stream(AVFormatContext *const myctx,
+int file_read_stream(AVFormatContext *const ctx,
                      AVStream *const        stream,
                      AVPacket *const        packet);
 
-int file_open_read_context(AVFormatContext **const myctx,
+int file_open_read_context(AVFormatContext **const ctx,
                            char const *const       filepath);
 
 #endif
