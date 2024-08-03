@@ -8,6 +8,10 @@
 
 #include <libavutil/avutil.h>
 
+int file_read_from_stream(AVFormatContext *const file,
+                          AVStream        *const stream,
+                          AVPacket        *const packet);
+
 int file_find_first_stream_by_media_type(AVFormatContext *const file,
                                          AVStream       **const stream,
                                          enum AVMediaType const media_type);
@@ -40,6 +44,18 @@ int main(int const argc, char const *const argv[])
                                                  AVMEDIA_TYPE_AUDIO);
     if (error < 0) goto frame_destroy;
 
+    while (1)
+    {
+        error = file_read_from_stream(in_file, in_audio, in_pkt); 
+        if (error < 0) break;
+
+            printf("pkt pts: %ld\n", in_pkt->pts);
+            printf("pkt dts: %ld\n", in_pkt->dts);
+            printf("pkt dur: %ld\n", in_pkt->duration);
+            printf("\n");
+
+        av_packet_unref(in_pkt);
+    }
 
     frame_destroy:
         av_frame_free(&in_frm);
@@ -72,6 +88,21 @@ int packet_create(AVPacket **const packet)
     return 0;
 }
 
+int file_read_from_stream(AVFormatContext *const file,
+                          AVStream        *const stream,
+                          AVPacket        *const packet)
+{
+    int error = 0;
+    while (1)
+    {
+        error = av_read_frame(file, packet);
+        if (error < 0) return -1;
+
+        if (packet->stream_index == stream->index) return 0;
+
+        av_packet_unref(packet);
+    }
+}
 
 int file_find_first_stream_by_media_type(AVFormatContext *const file,
                                          AVStream       **const stream,
