@@ -33,7 +33,7 @@ int main(int const argc, char const *const argv[])
 
     AVStream        * in_audio = NULL;
     AVCodecContext  * in_audio_decoder = NULL;
-
+    
     int error = 0;
 
     error = file_open_read(&in_file, argv[1]);
@@ -58,10 +58,26 @@ int main(int const argc, char const *const argv[])
         error = file_read_from_stream(in_file, in_audio, in_pkt); 
         if (error < 0) break;
 
+        error = avcodec_send_packet(in_audio_decoder, in_pkt);
+        if (error < 0) break;
+
+        while (1)
+        {
+            error = avcodec_receive_frame(in_audio_decoder, in_frm);
+            if (error < 0) break;
+
             printf("pkt pts: %ld\n", in_pkt->pts);
             printf("pkt dts: %ld\n", in_pkt->dts);
             printf("pkt dur: %ld\n", in_pkt->duration);
             printf("\n");
+
+            printf("frm pts: %ld\n", in_frm->pts);
+            printf("frm dts: %ld\n", in_frm->pkt_dts);
+            printf("frm dur: %ld\n", in_frm->duration);
+            printf("\n");
+
+            av_frame_unref(in_frm);
+        }
 
         av_packet_unref(in_pkt);
     }
