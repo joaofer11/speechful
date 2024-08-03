@@ -1,8 +1,16 @@
 #include <stdio.h>
+#include <stddef.h>
 
 #include <libavformat/avformat.h>
+#include <libavcodec/codec.h>
 #include <libavcodec/packet.h>
 #include <libavutil/frame.h>
+
+#include <libavutil/avutil.h>
+
+int file_find_first_stream_by_media_type(AVFormatContext *const file,
+                                         AVStream       **const stream,
+                                         enum AVMediaType const media_type);
 
 int frame_create(AVFrame **const frame);
 int packet_create(AVPacket **const packet);
@@ -14,6 +22,7 @@ int main(int const argc, char const *const argv[])
     AVPacket        * in_pkt  = NULL;
     AVFrame         * in_frm  = NULL;
 
+    AVStream        * in_audio = NULL;
 
     int error = 0;
 
@@ -25,6 +34,11 @@ int main(int const argc, char const *const argv[])
 
     error = frame_create(&in_frm);
     if (error < 0) goto packet_destroy;
+
+    error = file_find_first_stream_by_media_type(in_file, 
+                                                 &in_audio, 
+                                                 AVMEDIA_TYPE_AUDIO);
+    if (error < 0) goto frame_destroy;
 
 
     frame_destroy:
@@ -58,6 +72,21 @@ int packet_create(AVPacket **const packet)
     return 0;
 }
 
+
+int file_find_first_stream_by_media_type(AVFormatContext *const file,
+                                         AVStream       **const stream,
+                                         enum AVMediaType const media_type)
+{
+    for (size_t i = 0; i < file->nb_streams; ++i)
+    {
+        if (media_type == file->streams[i]->codecpar->codec_type) {
+            *stream = file->streams[i];
+            return 0;
+        }
+    }
+
+    return -1;
+}
 
 int file_open_read(AVFormatContext **const file, char const *const filepath)
 {
