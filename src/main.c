@@ -1,4 +1,6 @@
 #include <stdio.h>
+
+#include <libavformat/avformat.h>
 #include <libavcodec/packet.h>
 #include <libavutil/frame.h>
 
