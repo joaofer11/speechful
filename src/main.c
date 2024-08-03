@@ -11,7 +11,7 @@
 
 int main(int const argc, char const *const argv[])
 {
-    AVFormatContext * in_file_audio_ctx = NULL;
+    AVFormatContext * in_audio_file_ctx = NULL;
     AVStream * in_audio_stream = NULL;
     AVPacket * in_packet = NULL;
     AVFrame  * in_frame = NULL;
@@ -19,10 +19,10 @@ int main(int const argc, char const *const argv[])
 
     int error = 0;
 
-    error = file_open_read_context(&in_file_audio_ctx, argv[1]);
+    error = file_open_read_context(&in_audio_file_ctx, argv[1]);
     if (error < 0) return -1;
 
-    error = file_find_first_stream_by_media_type(in_file_audio_ctx,
+    error = file_find_first_stream_by_media_type(in_audio_file_ctx,
                                                  &in_audio_stream, 
                                                  AVMEDIA_TYPE_AUDIO);
     if (error < 0) goto file_close_input_audio_ctx;
@@ -44,10 +44,13 @@ int main(int const argc, char const *const argv[])
     error = codec_open_context(in_audio_decoder_ctx,
                                in_audio_decoder_ctx->codec);
     if (error < 0) goto codec_close_input_audio_decode_ctx;
+    /* Until this point the input audio file context is all set. */
+
+
 
     while (1)
     {
-        error = file_read_stream(in_file_audio_ctx, in_audio_stream, in_packet);
+        error = file_read_stream(in_audio_file_ctx, in_audio_stream, in_packet);
         if (error < 0) break;
 
         error = avcodec_send_packet(in_audio_decoder_ctx, in_packet);
@@ -85,7 +88,7 @@ int main(int const argc, char const *const argv[])
 
     file_close_input_audio_ctx:
         in_audio_stream = NULL;
-        avformat_close_input(&in_file_audio_ctx);
+        avformat_close_input(&in_audio_file_ctx);
 
     return 0;
 }
