@@ -15,6 +15,9 @@ int codec_frame_create(AVFrame **const frame);
 
 int codec_open_context(AVCodecContext *const ctx, AVCodec const *const codec);
 
+int codec_copy_params_from_context(AVCodecParameters *const params,
+                                   AVCodecContext *const    ctx);
+
 int codec_copy_params_to_context(AVCodecContext *const    ctx,
                                  AVCodecParameters *const params);
 

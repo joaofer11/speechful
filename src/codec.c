@@ -25,6 +25,15 @@ int codec_open_context(AVCodecContext *const ctx, AVCodec const *const codec)
     return error < 0 ? -1 : 0;
 }
 
+int codec_copy_params_from_context(AVCodecParameters *const params,
+                                   AVCodecContext *const    ctx)
+{
+    int error = avcodec_parameters_from_context(params, ctx);
+    return error < 0
+        ? -1
+        :  0;
+}
+
 int codec_copy_params_to_context(AVCodecContext *const    ctx,
                                  AVCodecParameters *const params)
 {
