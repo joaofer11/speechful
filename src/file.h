@@ -10,6 +10,9 @@ int file_find_first_stream_by_media_type(AVFormatContext *const ctx,
                                          AVStream       **const stream,
                                          enum AVMediaType const media_type);
 
+int file_add_empty_stream_to_context(AVFormatContext *const ctx,
+                                     AVStream **const       stream);
+
 int file_create_write_context(AVFormatContext **const ctx,
                               char const *const       filepath);
 
@@ -18,6 +21,6 @@ int file_read_stream(AVFormatContext *const ctx,
                      AVPacket *const        packet);
 
 int file_create_read_context(AVFormatContext **const ctx,
-                           char const *const       filepath);
+                             char const *const       filepath);
 
 #endif

@@ -18,6 +18,16 @@ int file_find_first_stream_by_media_type(AVFormatContext *const ctx,
     return -1;
 }
 
+int file_add_empty_stream_to_context(AVFormatContext *const ctx, 
+                                     AVStream **const       stream)
+{
+    *stream = avformat_new_stream(ctx, NULL);
+
+    return (NULL == *stream) 
+        ? -1
+        :  0;
+}
+
 int file_create_write_context(AVFormatContext **const ctx,
                               const char *const       filepath)
 {
@@ -64,7 +74,7 @@ int file_read_stream(AVFormatContext *const ctx,
 }
 
 int file_create_read_context(AVFormatContext **const ctx,
-                           char const *const       filepath)
+                             char const *const       filepath)
 {
     AVFormatContext * out = NULL;
     int error = 0;
