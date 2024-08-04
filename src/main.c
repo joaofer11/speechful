@@ -19,7 +19,7 @@ int main(int const argc, char const *const argv[])
 
     int error = 0;
 
-    error = file_open_read_context(&in_audio_file_ctx, argv[1]);
+    error = file_create_read_context(&in_audio_file_ctx, argv[1]);
     if (error < 0) return -1;
 
     error = file_find_first_stream_by_media_type(in_audio_file_ctx,
