@@ -49,6 +49,10 @@ int main(int const argc, char const *const argv[])
     error = file_create_write_context(&out_audio_file_ctx, argv[2]);
     if (error < 0) goto codec_destroy_audio_decode_ctx;
 
+    error = file_add_empty_stream_to_context(out_audio_file_ctx,
+                                             &out_audio_stream);
+    if (error < 0) goto file_destroy_writable_audio_ctx;
+
     while (1)
     {
         error = file_read_stream(in_audio_file_ctx, in_audio_stream, in_packet);
@@ -77,6 +81,12 @@ int main(int const argc, char const *const argv[])
 
         av_packet_unref(in_packet);
     }
+
+    file_destroy_writable_audio_ctx:
+        out_audio_stream = NULL;
+        avio_closep(&(out_audio_file_ctx->pb));     
+        avformat_free_context(out_audio_file_ctx);
+        out_audio_file_ctx = NULL;
 
     codec_destroy_audio_decode_ctx:
         avcodec_free_context(&in_audio_decoder_ctx);
