@@ -46,7 +46,8 @@ int main(int const argc, char const *const argv[])
     if (error < 0) goto codec_destroy_audio_decode_ctx;
     /* Until this point the input audio file context is all set. */
 
-
+    error = file_create_write_context(&out_audio_file_ctx, argv[2]);
+    if (error < 0) goto codec_destroy_audio_decode_ctx;
 
     while (1)
     {
