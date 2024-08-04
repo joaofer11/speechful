@@ -25,10 +25,10 @@ int main(int const argc, char const *const argv[])
     error = file_find_first_stream_by_media_type(in_audio_file_ctx,
                                                  &in_audio_stream, 
                                                  AVMEDIA_TYPE_AUDIO);
-    if (error < 0) goto file_close_input_audio_ctx;
+    if (error < 0) goto file_destroy_readable_audio_ctx;
 
     error = codec_packet_create(&in_packet);
-    if (error < 0) goto file_close_input_audio_ctx;
+    if (error < 0) goto file_destroy_readable_audio_ctx;
 
     error = codec_frame_create(&in_frame);
     if (error < 0) goto codec_packet_close_input;
@@ -86,7 +86,7 @@ int main(int const argc, char const *const argv[])
     codec_packet_close_input:
         av_packet_free(&in_packet);
 
-    file_close_input_audio_ctx:
+    file_destroy_readable_audio_ctx:
         in_audio_stream = NULL;
         avformat_close_input(&in_audio_file_ctx);
 
