@@ -1,4 +1,7 @@
 #include "file.h"
+#include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavutil/mem.h>
 
 int file_find_first_stream_by_media_type(AVFormatContext *const ctx,
                                          AVStream       **const stream,
@@ -11,6 +14,35 @@ int file_find_first_stream_by_media_type(AVFormatContext *const ctx,
             return 0;
         }
     }
+
+    return -1;
+}
+
+int file_create_write_context(AVFormatContext **const ctx,
+                              const char *const       filepath)
+{
+    int error = 0;
+
+    *ctx = avformat_alloc_context();
+    if (NULL == *ctx) return -1;
+
+    error = avio_open(&((*ctx)->pb), filepath, AVIO_FLAG_WRITE);
+    if (error < 0) goto file_destroy_context;
+
+    (*ctx)->oformat = av_guess_format(NULL, filepath, NULL);
+    if (NULL == (*ctx)->oformat) goto file_destroy_writable_io;
+
+    (*ctx)->url = av_strdup(filepath);
+    if (NULL == (*ctx)->url) goto file_destroy_writable_io;
+
+    return 0;
+
+    file_destroy_writable_io:
+        avio_closep(&((*ctx)->pb));
+
+    file_destroy_context:
+        avformat_free_context(*ctx);
+        *ctx = NULL;
 
     return -1;
 }
