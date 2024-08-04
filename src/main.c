@@ -53,6 +53,10 @@ int main(int const argc, char const *const argv[])
                                              &out_audio_stream);
     if (error < 0) goto file_destroy_writable_audio_ctx;
 
+    error = codec_create_encode_context(&out_audio_encoder_ctx,
+                                        AV_CODEC_ID_MP3);
+    if (error < 0) goto file_destroy_writable_audio_ctx;
+
     while (1)
     {
         error = file_read_stream(in_audio_file_ctx, in_audio_stream, in_packet);
