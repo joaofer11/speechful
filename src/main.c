@@ -39,11 +39,11 @@ int main(int const argc, char const *const argv[])
 
     error = codec_copy_params_to_context(in_audio_decoder_ctx,
                                          in_audio_stream->codecpar);
-    if (error < 0) goto codec_close_input_audio_decode_ctx;
+    if (error < 0) goto codec_destroy_audio_decode_ctx;
 
     error = codec_open_context(in_audio_decoder_ctx,
                                in_audio_decoder_ctx->codec);
-    if (error < 0) goto codec_close_input_audio_decode_ctx;
+    if (error < 0) goto codec_destroy_audio_decode_ctx;
     /* Until this point the input audio file context is all set. */
 
 
@@ -77,7 +77,7 @@ int main(int const argc, char const *const argv[])
         av_packet_unref(in_packet);
     }
 
-    codec_close_input_audio_decode_ctx:
+    codec_destroy_audio_decode_ctx:
         avcodec_free_context(&in_audio_decoder_ctx);
 
     codec_frame_destroy_input:
