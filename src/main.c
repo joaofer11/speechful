@@ -17,6 +17,10 @@ int main(int const argc, char const *const argv[])
     AVFrame  * in_frame = NULL;
     AVCodecContext * in_audio_decoder_ctx = NULL;
 
+    AVFormatContext * out_audio_file_ctx = NULL;
+    AVStream * out_audio_stream = NULL;
+    AVCodecContext * out_audio_encoder_ctx = NULL;
+
     int error = 0;
 
     error = file_create_read_context(&in_audio_file_ctx, argv[1]);
