@@ -1,3 +1,5 @@
+#include <libavformat/avio.h>
+#include <libavutil/channel_layout.h>
 #include <stdio.h>
 
 #include <libavformat/avformat.h>
