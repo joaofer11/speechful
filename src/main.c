@@ -35,7 +35,7 @@ int main(int const argc, char const *const argv[])
 
     error = codec_create_decode_context(&in_audio_decoder_ctx,
                                         in_audio_stream->codecpar->codec_id);
-    if (error < 0) goto codec_frame_close_input;
+    if (error < 0) goto codec_frame_destroy_input;
 
     error = codec_copy_params_to_context(in_audio_decoder_ctx,
                                          in_audio_stream->codecpar);
@@ -80,7 +80,7 @@ int main(int const argc, char const *const argv[])
     codec_close_input_audio_decode_ctx:
         avcodec_free_context(&in_audio_decoder_ctx);
 
-    codec_frame_close_input:
+    codec_frame_destroy_input:
         av_frame_free(&in_frame);
 
     codec_packet_destroy_input:
