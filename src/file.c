@@ -31,7 +31,7 @@ int file_read_stream(AVFormatContext *const ctx,
     }
 }
 
-int file_open_read_context(AVFormatContext **const ctx,
+int file_create_read_context(AVFormatContext **const ctx,
                            char const *const       filepath)
 {
     AVFormatContext * out = NULL;
