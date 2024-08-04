@@ -18,6 +18,9 @@ int codec_open_context(AVCodecContext *const ctx, AVCodec const *const codec);
 int codec_copy_params_to_context(AVCodecContext *const    ctx,
                                  AVCodecParameters *const params);
 
+int codec_create_encode_context(AVCodecContext **const ctx,
+                                const enum AVCodecID   id);
+
 int codec_create_decode_context(AVCodecContext **const ctx, 
                                 enum AVCodecID const   id);
 

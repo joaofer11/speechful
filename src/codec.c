@@ -32,6 +32,20 @@ int codec_copy_params_to_context(AVCodecContext *const    ctx,
     return error < 0 ? -1 : 0;
 }
 
+int codec_create_encode_context(AVCodecContext **const ctx,
+                                const enum AVCodecID   id)
+{
+    AVCodec const * codec = NULL;
+
+    codec = avcodec_find_encoder(id);
+    if (NULL == codec) return -1;
+
+    *ctx = avcodec_alloc_context3(codec);
+    if (NULL == *ctx) return -1;
+
+    return 0;
+}
+
 int codec_create_decode_context(AVCodecContext **const ctx, 
                                 enum AVCodecID const   id)
 {
