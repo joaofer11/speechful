@@ -1,134 +1,172 @@
-#include <libavformat/avio.h>
-#include <libavutil/channel_layout.h>
+#include <libavcodec/codec.h>
+#include <libavcodec/codec_id.h>
+#include <libavcodec/codec_par.h>
+#include <libavcodec/packet.h>
+#include <libavutil/avutil.h>
+#include <libavutil/error.h>
+#include <libavutil/frame.h>
 #include <stdio.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <libavcodec/packet.h>
-#include <libavutil/frame.h>
-#include <libavutil/avutil.h>
 
-#include "file.h"
-#include "codec.h"
+AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params);
+
+int file_read(AVFormatContext *const file,
+              AVPacket        *const packet,
+              AVStream        *const stream);
+
+AVStream *file_find_stream_by_type(AVFormatContext *const file,
+                              enum AVMediaType      const type);
+
+AVFormatContext *file_open_read_context(const char *const filepath);
+
 
 int main(int const argc, char const *const argv[])
 {
-    AVFormatContext * in_audio_file_ctx = NULL;
-    AVStream * in_audio_stream = NULL;
-    AVPacket * in_packet = NULL;
-    AVFrame  * in_frame = NULL;
-    AVCodecContext * in_audio_decoder_ctx = NULL;
+    AVFormatContext *input_audio_file_ctx       = NULL;
 
-    AVFormatContext * out_audio_file_ctx = NULL;
-    AVStream * out_audio_stream = NULL;
-    AVCodecContext * out_audio_encoder_ctx = NULL;
+    AVCodecContext  *input_audio_stream_decoder = NULL;
+    AVStream        *input_audio_stream         = NULL;
+    AVPacket        *input_packet               = NULL;
+    AVFrame         *input_frame                = NULL;
 
     int error = 0;
+    
+    if (NULL == (input_packet = av_packet_alloc()) ||
+        NULL == (input_frame  = av_frame_alloc())) {
+        fprintf(stderr, "Error: Could not allocate packet or frame.\n");
+        goto error;
+    }
+    
+    input_audio_file_ctx = file_open_read_context(argv[1]);
+    if (NULL == input_audio_file_ctx) goto error;
 
-    error = file_create_read_context(&in_audio_file_ctx, argv[1]);
-    if (error < 0) return -1;
+    input_audio_stream = file_find_stream_by_type(input_audio_file_ctx,
+                                                  AVMEDIA_TYPE_AUDIO);
+    if (NULL == input_audio_stream) goto error;
 
-    error = file_find_first_stream_by_media_type(in_audio_file_ctx,
-                                                 &in_audio_stream, 
-                                                 AVMEDIA_TYPE_AUDIO);
-    if (error < 0) goto file_destroy_readable_audio_ctx;
+    input_audio_file_ctx = file_open_read_context(argv[1]);
+    if (NULL == input_audio_stream) goto error;
 
-    error = codec_packet_create(&in_packet);
-    if (error < 0) goto file_destroy_readable_audio_ctx;
+    input_audio_stream_decoder = codec_open_decoder_context(input_audio_stream->codecpar);  
+    if (NULL == input_audio_stream_decoder) goto error;
 
-    error = codec_frame_create(&in_frame);
-    if (error < 0) goto codec_packet_destroy_input;
-
-    error = codec_create_decode_context(&in_audio_decoder_ctx,
-                                        in_audio_stream->codecpar->codec_id);
-    if (error < 0) goto codec_frame_destroy_input;
-
-    error = codec_copy_params_to_context(in_audio_decoder_ctx,
-                                         in_audio_stream->codecpar);
-    if (error < 0) goto codec_destroy_audio_decode_ctx;
-
-    error = codec_open_context(in_audio_decoder_ctx,
-                               in_audio_decoder_ctx->codec);
-    if (error < 0) goto codec_destroy_audio_decode_ctx;
-    /* Until this point the input audio file context is all set. */
-
-    error = file_create_write_context(&out_audio_file_ctx, argv[2]);
-    if (error < 0) goto codec_destroy_audio_decode_ctx;
-
-    error = file_add_empty_stream_to_context(out_audio_file_ctx,
-                                             &out_audio_stream);
-    if (error < 0) goto file_destroy_writable_audio_ctx;
-
-    error = codec_create_encode_context(&out_audio_encoder_ctx,
-                                        AV_CODEC_ID_MP3);
-    if (error < 0) goto file_destroy_writable_audio_ctx;
-
-    out_audio_encoder_ctx->sample_fmt  = in_audio_decoder_ctx->sample_fmt;
-    out_audio_encoder_ctx->sample_rate = in_audio_decoder_ctx->sample_rate;
-    out_audio_encoder_ctx->bit_rate    = in_audio_decoder_ctx->bit_rate;
-    av_channel_layout_default(&(out_audio_encoder_ctx->ch_layout), 2);
-
-    out_audio_stream->time_base.num = 1;
-    out_audio_stream->time_base.den = out_audio_encoder_ctx->sample_rate;
-
-    error = codec_open_context(out_audio_encoder_ctx,
-                               out_audio_encoder_ctx->codec);
-    if (error < 0) goto codec_destroy_audio_encode_ctx;
-
-    error = codec_copy_params_from_context(out_audio_stream->codecpar,
-                                           out_audio_encoder_ctx);
-    if (error < 0) goto codec_destroy_audio_encode_ctx;
-
-    while (1)
-    {
-        error = file_read_stream(in_audio_file_ctx, in_audio_stream, in_packet);
-        if (error < 0) break;
-
-        error = avcodec_send_packet(in_audio_decoder_ctx, in_packet);
-        if (error < 0) break;
-
-        while (1)
-        {
-            error = avcodec_receive_frame(in_audio_decoder_ctx, in_frame);
-            if (error < 0) break;
-
-            printf("pkt pts: %ld\n", in_packet->pts);
-            printf("pkt dts: %ld\n", in_packet->dts);
-            printf("pkt dur: %ld\n", in_packet->duration);
-            printf("\n");
-
-            printf("frm pts: %ld\n", in_frame->pts);
-            printf("frm dts: %ld\n", in_frame->pkt_dts);
-            printf("frm dur: %ld\n", in_frame->duration);
-            printf("\n");
-
-            av_frame_unref(in_frame);
+    while (0 == (error = file_read(input_audio_file_ctx, input_packet, input_audio_stream))) {
+        error = avcodec_send_packet(input_audio_stream_decoder, input_packet);
+        if (error < 0) {
+            fprintf(stderr, "Error: could not decode input audio stream.\n");
+            goto error;
         }
 
-        av_packet_unref(in_packet);
+        while (0 == (error = avcodec_receive_frame(input_audio_stream_decoder, input_frame))) {
+            printf("pkt pts: %ld\n", input_packet->pts);
+            printf("pkt dts: %ld\n", input_packet->dts);
+            printf("pkt dur: %ld\n", input_packet->duration);
+            printf("\n");
+
+            printf("frm pts: %ld\n", input_frame->pts);
+            printf("frm dts: %ld\n", input_frame->pkt_dts);
+            printf("frm dur: %ld\n", input_frame->duration);
+            printf("\n");
+
+            av_frame_unref(input_frame);
+        }
+
+        if (AVERROR(EAGAIN) != error) {
+            fprintf(stderr, "Error: could not decode input audio stream.\n");
+            goto error;
+        }
+
+        av_packet_unref(input_packet);
     }
 
-    codec_destroy_audio_encode_ctx:
-        avcodec_free_context(&out_audio_encoder_ctx);
+    error = 0;
 
-    file_destroy_writable_audio_ctx:
-        out_audio_stream = NULL;
-        avio_closep(&(out_audio_file_ctx->pb));     
-        avformat_free_context(out_audio_file_ctx);
-        out_audio_file_ctx = NULL;
+    exit:
+        input_audio_stream = NULL;
 
-    codec_destroy_audio_decode_ctx:
-        avcodec_free_context(&in_audio_decoder_ctx);
+        if (NULL != input_packet)               av_packet_free(&input_packet);
+        if (NULL != input_frame)                av_frame_free(&input_frame);
+        if (NULL != input_audio_file_ctx)       avformat_close_input(&input_audio_file_ctx);
+        if (NULL != input_audio_stream_decoder) avcodec_free_context(&input_audio_stream_decoder);
 
-    codec_frame_destroy_input:
-        av_frame_free(&in_frame);
+       return error; 
 
-    codec_packet_destroy_input:
-        av_packet_free(&in_packet);
+    error:
+        error = 1; 
+        goto exit;
+}
 
-    file_destroy_readable_audio_ctx:
-        in_audio_stream = NULL;
-        avformat_close_input(&in_audio_file_ctx);
+AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params)
+{
+    AVCodecContext *ret   = NULL;
+    AVCodec const  *codec = NULL;
 
-    return 0;
+    int error = 0;
+    
+    codec = avcodec_find_decoder(params->codec_id);
+    if (NULL == codec) goto error;
+
+    ret = avcodec_alloc_context3(codec);
+    if (NULL == ret) goto error;
+
+    error = avcodec_open2(ret, codec, NULL);
+    if (error < 0) goto error;
+    
+    return ret;
+
+    error:
+        if (NULL != ret) avcodec_free_context(&ret);
+
+        fprintf(stderr, "Error: could not open decoder '%s'.\n", avcodec_get_name(params->codec_id));
+        return NULL;
+}
+
+AVStream *file_find_stream_by_type(AVFormatContext *const file,
+                              enum AVMediaType      const type)
+{
+    for (size_t i = 0; i < file->nb_streams; ++i)
+        if (type == file->streams[i]->codecpar->codec_type)
+            return file->streams[i];
+
+    fprintf(stderr, "Error: No %s was found in file '%s'.\n",
+                     av_get_media_type_string(type),
+                     file->url);
+    return NULL;
+}
+
+int file_read(AVFormatContext *const file,
+              AVPacket        *const packet,
+              AVStream        *const stream)
+{
+    int error = 0;
+    while (0 == (error = av_read_frame(file, packet))) {
+        if (packet->stream_index == stream->index) return 0;
+
+        av_packet_unref(packet);
+    }
+
+    return error;
+}
+
+AVFormatContext *file_open_read_context(const char *const filepath)
+{
+    AVFormatContext *ret = NULL;
+    int error = 0;
+
+    error = avformat_open_input(&ret, filepath, NULL, NULL);
+    if (error < 0) goto error;
+
+    error = avformat_find_stream_info(ret, NULL);
+    if (error < 0) goto error;
+
+    return ret;
+
+    error:
+        fprintf(stderr, "Error: Could not open file '%s'.\n", filepath);
+        fprintf(stderr, "Reason: %s\n", av_err2str(error));
+        avformat_close_input(&ret);
+        
+        return NULL;
 }
