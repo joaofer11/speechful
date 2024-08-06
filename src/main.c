@@ -167,6 +167,9 @@ AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params)
     ret = avcodec_alloc_context3(codec);
     if (NULL == ret) goto error;
 
+    error = avcodec_parameters_to_context(ret, params);
+    if (error < 0) goto error;
+
     error = avcodec_open2(ret, codec, NULL);
     if (error < 0) goto error;
     
