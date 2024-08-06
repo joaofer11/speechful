@@ -28,10 +28,12 @@ int main(int const argc, char const *const argv[])
     AVFormatContext *input_audio_file_ctx             = NULL;
     AVFormatContext *output_audio_file_ctx            = NULL;
 
-    AVCodecContext  *input_audio_stream_decoder = NULL;
-    AVStream        *input_audio_stream         = NULL;
-    AVPacket        *input_packet               = NULL;
-    AVFrame         *input_frame                = NULL;
+    AVCodecContext  *input_audio_stream_decoder       = NULL;
+    AVStream        *input_audio_stream               = NULL;
+    AVPacket        *input_packet                     = NULL;
+    AVFrame         *input_frame                      = NULL;
+ 
+    AVStream        *output_audio_stream              = NULL;
 
     int error = 0;
     
@@ -58,10 +60,9 @@ int main(int const argc, char const *const argv[])
     output_audio_file_ctx = file_open_write_context(argv[2]);
     if (error < 0) goto error;
 
-    while (0 == (error = file_read(input_audio_file_ctx, input_packet, input_audio_stream))) {
-        error = avcodec_send_packet(input_audio_stream_decoder, input_packet);
-        if (error < 0) {
-            fprintf(stderr, "Error: could not decode input audio stream.\n");
+    output_audio_stream = avformat_new_stream(output_audio_file_ctx, NULL);
+    if (NULL == output_audio_stream) goto error;
+
             goto error;
         }
 
@@ -90,7 +91,8 @@ int main(int const argc, char const *const argv[])
     error = 0;
 
     exit:
-        input_audio_stream = NULL;
+        input_audio_stream  = NULL;
+        output_audio_stream = NULL;
 
         if (NULL != input_packet)               av_packet_free(&input_packet);
         if (NULL != input_frame)                av_frame_free(&input_frame);
