@@ -62,7 +62,7 @@ int main(int const argc, char const *const argv[])
     AVAudioFifo     *samples_to_encode                     = NULL;
 
     size_t           samples_encoded_count                 = 0;
-bool             has_input_audio_file_been_fully_read  = false;
+    bool             has_input_audio_file_been_fully_read  = false;
 
     int error = 0;
     
@@ -109,8 +109,8 @@ bool             has_input_audio_file_been_fully_read  = false;
                                             output_audio_stream_encoder->frame_size);
     if (NULL == samples_to_encode) {
         fprintf(stderr, "Error: could not alloc queue.\n");
-            goto error;
-        }
+        goto error;
+    }
 
     /* The real fun starts here... */
     while (!has_input_audio_file_been_fully_read) {
@@ -230,6 +230,9 @@ bool             has_input_audio_file_been_fully_read  = false;
 
         av_packet_unref(input_packet);
     }
+
+    error = av_write_trailer(output_audio_file_ctx);
+    if (error < 0) goto error;
 
     error = 0;
 
