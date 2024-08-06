@@ -19,12 +19,14 @@ int file_read(AVFormatContext *const file,
 AVStream *file_find_stream_by_type(AVFormatContext *const file,
                               enum AVMediaType      const type);
 
-AVFormatContext *file_open_read_context(const char *const filepath);
+AVFormatContext *file_open_write_context(char const *const filepath);
+AVFormatContext *file_open_read_context(char const *const filepath);
 
 
 int main(int const argc, char const *const argv[])
 {
-    AVFormatContext *input_audio_file_ctx       = NULL;
+    AVFormatContext *input_audio_file_ctx             = NULL;
+    AVFormatContext *output_audio_file_ctx            = NULL;
 
     AVCodecContext  *input_audio_stream_decoder = NULL;
     AVStream        *input_audio_stream         = NULL;
@@ -51,6 +53,10 @@ int main(int const argc, char const *const argv[])
 
     input_audio_stream_decoder = codec_open_decoder_context(input_audio_stream->codecpar);  
     if (NULL == input_audio_stream_decoder) goto error;
+    /* Until this point the input audio is ready to be read and decoded. */ 
+
+    output_audio_file_ctx = file_open_write_context(argv[2]);
+    if (error < 0) goto error;
 
     while (0 == (error = file_read(input_audio_file_ctx, input_packet, input_audio_stream))) {
         error = avcodec_send_packet(input_audio_stream_decoder, input_packet);
@@ -91,6 +97,11 @@ int main(int const argc, char const *const argv[])
         if (NULL != input_audio_file_ctx)       avformat_close_input(&input_audio_file_ctx);
         if (NULL != input_audio_stream_decoder) avcodec_free_context(&input_audio_stream_decoder);
 
+        if (NULL != output_audio_file_ctx) {
+            avio_closep(&(output_audio_file_ctx->pb));
+            avformat_free_context(output_audio_file_ctx);
+            output_audio_file_ctx = NULL;
+        }
        return error; 
 
     error:
@@ -148,6 +159,33 @@ int file_read(AVFormatContext *const file,
     }
 
     return error;
+}
+AVFormatContext *file_open_write_context(char const *const filepath)
+{
+    AVFormatContext *ret = NULL;
+    int error = 0;
+
+    ret = avformat_alloc_context();
+    if (NULL == ret) goto error;
+
+    error = avio_open(&(ret->pb), filepath, AVIO_FLAG_WRITE);
+    if (error < 0) goto error;
+
+    ret->url     = av_strdup(filepath);
+    ret->oformat = av_guess_format(NULL, filepath, NULL);
+    if (NULL == ret->url ||
+        NULL == ret->oformat) goto error;
+
+    return ret;
+
+    error:
+        if (NULL != ret) {
+            if (NULL != ret->pb) avio_closep(&(ret->pb));
+            avformat_free_context(ret);
+        }
+
+        fprintf(stderr, "Error: could not open file '%s'.\n", filepath);
+        return NULL;
 }
 
 AVFormatContext *file_open_read_context(const char *const filepath)
