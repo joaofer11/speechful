@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -17,6 +18,8 @@
 #include <libavutil/samplefmt.h>
 
 #include <libavutil/avutil.h>
+#include <libavutil/mem.h>
+#include <libavutil/macros.h>
 #include <libavutil/error.h>
 
 
@@ -42,23 +45,24 @@ AVFormatContext *file_open_read_context(char const *const filepath);
 
 int main(int const argc, char const *const argv[])
 {
-    AVFormatContext *input_audio_file_ctx             = NULL;
-    AVFormatContext *output_audio_file_ctx            = NULL;
+    AVFormatContext *input_audio_file_ctx                  = NULL;
+    AVFormatContext *output_audio_file_ctx                 = NULL;
 
-    AVCodecContext  *input_audio_stream_decoder       = NULL;
-    AVStream        *input_audio_stream               = NULL;
-    AVPacket        *input_packet                     = NULL;
-    AVFrame         *input_frame                      = NULL;
+    AVCodecContext  *input_audio_stream_decoder            = NULL;
+    AVStream        *input_audio_stream                    = NULL;
+    AVPacket        *input_packet                          = NULL;
+    AVFrame         *input_frame                           = NULL;
  
-    AVCodecContext  *output_audio_stream_encoder      = NULL;
-    AVStream        *output_audio_stream              = NULL;
-    AVPacket        *output_packet                    = NULL;
-    AVFrame         *output_frame                     = NULL;
+    AVCodecContext  *output_audio_stream_encoder           = NULL;
+    AVStream        *output_audio_stream                   = NULL;
+    AVPacket        *output_packet                         = NULL;
+    AVFrame         *output_frame                          = NULL;
 
-    SwrContext      *resampler                        = NULL;
-    AVAudioFifo     *samples_to_encode                = NULL;
+    SwrContext      *resampler                             = NULL;
+    AVAudioFifo     *samples_to_encode                     = NULL;
 
-    size_t           samples_encoded_count            = 0;
+    size_t           samples_encoded_count                 = 0;
+bool             has_input_audio_file_been_fully_read  = false;
 
     int error = 0;
     
@@ -108,23 +112,59 @@ int main(int const argc, char const *const argv[])
             goto error;
         }
 
-        while (0 == (error = avcodec_receive_frame(input_audio_stream_decoder, input_frame))) {
-            printf("pkt pts: %ld\n", input_packet->pts);
-            printf("pkt dts: %ld\n", input_packet->dts);
-            printf("pkt dur: %ld\n", input_packet->duration);
-            printf("\n");
+    /* The real fun starts here... */
+    while (!has_input_audio_file_been_fully_read) {
+        error = file_read(input_audio_file_ctx, input_packet, input_audio_stream);
+        if (error < 0 && AVERROR_EOF != error) goto error;
 
-            printf("frm pts: %ld\n", input_frame->pts);
-            printf("frm dts: %ld\n", input_frame->pkt_dts);
-            printf("frm dur: %ld\n", input_frame->duration);
-            printf("\n");
+        has_input_audio_file_been_fully_read = AVERROR_EOF == error;
+
+        /* Send encoded input audio data to the decoder if there's any.
+         *
+         * Otherwise signal the decoder to release any internal
+         * buffered decoded data. */
+        error = avcodec_send_packet(input_audio_stream_decoder,
+                                    has_input_audio_file_been_fully_read
+                                        ? NULL 
+                                        : input_packet);
+        if (error < 0) goto error;
+
+        /* Resample each decoded input audio data from the decoder. */
+        while (0 == (error = avcodec_receive_frame(input_audio_stream_decoder, input_frame))) {
+            uint8_t                   **converted_samples  = NULL;
+            uint8_t const *const *const samples_to_convert = (uint8_t const *const *const)(input_frame->extended_data); 
+
+            /* Alloc temporary storage for the converted 
+             * input audio samples. */
+            error = av_samples_alloc_array_and_samples(&converted_samples,
+                                                        NULL,
+                                                        output_audio_stream_encoder->ch_layout.nb_channels,
+                                                        input_frame->nb_samples,
+                                                        output_audio_stream_encoder->sample_fmt,
+                                                        0);
+            if (error < 0) goto error;
+
+            error = swr_convert(resampler,
+                                converted_samples,  input_frame->nb_samples,
+                                samples_to_convert, input_frame->nb_samples);
+            if (error >= 0) {
+                /* Samples was succesfully converted now save them
+                 * to be encoded later. */
+                error = av_audio_fifo_write(samples_to_encode,
+                                    (void**)converted_samples,
+                                            input_frame->nb_samples);
+            }
 
             av_frame_unref(input_frame);
+            av_freep(converted_samples);
+            converted_samples = NULL;
+
+            if (error < 0) goto error;
         }
 
-        if (AVERROR(EAGAIN) != error) {
-            fprintf(stderr, "Error: could not decode input audio stream.\n");
-            goto error;
+        if (AVERROR(EAGAIN) != error &&
+            AVERROR_EOF     != error) goto error;
+
         }
 
         av_packet_unref(input_packet);
