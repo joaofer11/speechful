@@ -6,6 +6,9 @@
 #include <libavcodec/packet.h>
 #include <libavutil/frame.h>
 
+#include <libswresample/swresample.h>
+#include <libavutil/audio_fifo.h>
+
 #include <libavformat/avio.h>
 #include <libavcodec/codec.h>
 #include <libavcodec/codec_id.h>
@@ -53,6 +56,9 @@ int main(int const argc, char const *const argv[])
     AVFrame         *output_frame                     = NULL;
 
     SwrContext      *resampler                        = NULL;
+    AVAudioFifo     *samples_to_encode                = NULL;
+
+    size_t           samples_encoded_count            = 0;
 
     int error = 0;
     
@@ -94,6 +100,11 @@ int main(int const argc, char const *const argv[])
                                        input_audio_stream_decoder);
     if (NULL == resampler) goto error;
 
+    samples_to_encode = av_audio_fifo_alloc(output_audio_stream_encoder->sample_fmt,
+                                            output_audio_stream_encoder->ch_layout.nb_channels,
+                                            output_audio_stream_encoder->frame_size);
+    if (NULL == samples_to_encode) {
+        fprintf(stderr, "Error: could not alloc queue.\n");
             goto error;
         }
 
@@ -141,6 +152,8 @@ int main(int const argc, char const *const argv[])
         if (NULL != output_audio_stream_encoder) avcodec_free_context(&output_audio_stream_encoder);
 
         if (NULL != resampler)                   swr_free(&resampler);
+        if (NULL != samples_to_encode)           av_audio_fifo_free(samples_to_encode);
+
        return error; 
 
     error:
