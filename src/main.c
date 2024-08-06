@@ -210,6 +210,22 @@ bool             has_input_audio_file_been_fully_read  = false;
             if (AVERROR(EAGAIN) != error &&
                 AVERROR_EOF     != error) goto error;
         }
+
+        if (has_input_audio_file_been_fully_read) {
+            /* Tell the output audio encoder to release 
+             * any internal buffered data. */
+            error = avcodec_send_frame(output_audio_stream_encoder, NULL);
+            if (error < 0) goto error;
+
+            while (0 == (error = avcodec_receive_packet(output_audio_stream_encoder, output_packet))) {
+                error = av_write_frame(output_audio_file_ctx, output_packet);                                  
+                if (error < 0) goto error;
+
+                av_packet_unref(output_packet);
+            }
+
+            if (AVERROR(EAGAIN) != error &&
+                AVERROR_EOF     != error) goto error;
         }
 
         av_packet_unref(input_packet);
