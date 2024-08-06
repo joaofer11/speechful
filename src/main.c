@@ -1,11 +1,24 @@
+#include <stdio.h>
+#include <stdint.h>
+
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavcodec/packet.h>
+#include <libavutil/frame.h>
+
 #include <libavformat/avio.h>
 #include <libavcodec/codec.h>
 #include <libavcodec/codec_id.h>
 #include <libavcodec/codec_par.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
+
 #include <libavutil/avutil.h>
 #include <libavutil/error.h>
+
+
+SwrContext *resampler_open_context(AVCodecContext *const out_codec,
+                                   AVCodecContext *const src_codec);
 
 AVCodecContext *config_output_audio_stream_encoder(AVStream *const audio_stream);
 
@@ -39,6 +52,7 @@ int main(int const argc, char const *const argv[])
     AVPacket        *output_packet                    = NULL;
     AVFrame         *output_frame                     = NULL;
 
+    SwrContext      *resampler                        = NULL;
 
     int error = 0;
     
@@ -75,6 +89,10 @@ int main(int const argc, char const *const argv[])
 
     error = file_write_header(output_audio_file_ctx);
     if (error < 0) goto error;
+
+    resampler = resampler_open_context(output_audio_stream_encoder, 
+                                       input_audio_stream_decoder);
+    if (NULL == resampler) goto error;
 
             goto error;
         }
@@ -121,12 +139,43 @@ int main(int const argc, char const *const argv[])
             output_audio_file_ctx = NULL;
         }
         if (NULL != output_audio_stream_encoder) avcodec_free_context(&output_audio_stream_encoder);
+
+        if (NULL != resampler)                   swr_free(&resampler);
        return error; 
 
     error:
         error = 1; 
         goto exit;
 }
+
+SwrContext *resampler_open_context(AVCodecContext *const dst_codec,
+                                   AVCodecContext *const src_codec)
+{
+    SwrContext *ret = NULL;
+    int error = 0;
+
+    error = swr_alloc_set_opts2(&ret,
+                                    &(dst_codec->ch_layout),
+                                      dst_codec->sample_fmt,
+                                      dst_codec->sample_rate,
+                                    &(src_codec->ch_layout),
+                                      src_codec->sample_fmt,
+                                      src_codec->sample_rate,
+                                      0, NULL);
+    if (error < 0) goto error;
+
+    error = swr_init(ret);
+    if (error < 0) goto error;
+    
+    return ret;
+
+    error:
+        if (NULL != ret) swr_free(&ret);
+
+        fprintf(stderr, "Error: could not open resampler.\n");
+        return NULL;
+}
+
 AVCodecContext *config_output_audio_stream_encoder(AVStream *const audio_stream)
 {
     AVCodecContext *ret   = NULL;
