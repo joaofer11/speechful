@@ -18,6 +18,8 @@ int file_read(AVFormatContext *const file,
 AVStream *file_find_stream_by_type(AVFormatContext *const file,
                               enum AVMediaType      const type);
 
+int file_write_header(AVFormatContext *const file);
+
 AVFormatContext *file_open_write_context(char const *const filepath);
 AVFormatContext *file_open_read_context(char const *const filepath);
 
@@ -65,6 +67,9 @@ int main(int const argc, char const *const argv[])
 
     output_audio_stream_encoder = config_output_audio_stream_encoder(output_audio_stream);
     if (NULL == output_audio_stream_encoder) goto error;
+
+    error = file_write_header(output_audio_file_ctx);
+    if (error < 0) goto error;
 
             goto error;
         }
@@ -200,6 +205,18 @@ int file_read(AVFormatContext *const file,
 
     return error;
 }
+
+int file_write_header(AVFormatContext *const file)
+{
+    int error = avformat_write_header(file, NULL);
+    if (error < 0) {
+        fprintf(stderr, "Error: could not write header to file '%s'.\n", file->url);
+        return -1;
+    }
+
+    return 0;
+}
+
 AVFormatContext *file_open_write_context(char const *const filepath)
 {
     AVFormatContext *ret = NULL;
