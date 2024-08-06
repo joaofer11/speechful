@@ -165,6 +165,51 @@ bool             has_input_audio_file_been_fully_read  = false;
         if (AVERROR(EAGAIN) != error &&
             AVERROR_EOF     != error) goto error;
 
+        /* Encode the converted input audio samples and write
+         * them into the output audio file. */
+        while (av_audio_fifo_size(samples_to_encode) >= output_audio_stream_encoder->frame_size ||
+              (has_input_audio_file_been_fully_read && av_audio_fifo_size(samples_to_encode) > 0)) {
+            /* Number of samples to encode should ALWAYS be equal to
+             * the maximum size of samples the encoder supports.
+             *
+             * When the number of samples to encode is less than the
+             * maximum size the encoder supports, this mean we
+             * reached the last chunk of data from input audio. */
+            size_t const nb_samples_to_encode = FFMIN(av_audio_fifo_size(samples_to_encode),
+                                                      output_audio_stream_encoder->frame_size);
+
+            output_frame->nb_samples  = nb_samples_to_encode;
+            output_frame->sample_rate = output_audio_stream_encoder->sample_rate;
+            output_frame->format      = output_audio_stream_encoder->sample_fmt;
+            av_channel_layout_copy(&(output_frame->ch_layout),
+                                   &(output_audio_stream_encoder->ch_layout));
+
+            output_frame->pts      = samples_encoded_count;
+            samples_encoded_count += nb_samples_to_encode;
+
+            error = av_frame_get_buffer(output_frame, 0);
+            if (error < 0) goto error;
+
+            error = av_audio_fifo_read(samples_to_encode,
+                              (void**)(output_frame->extended_data),
+                                       nb_samples_to_encode);
+            if (error < 0) goto error;
+
+            error = avcodec_send_frame(output_audio_stream_encoder, output_frame);
+            if (error < 0) goto error;
+
+            while (0 == (error = avcodec_receive_packet(output_audio_stream_encoder, output_packet))) {
+                error = av_write_frame(output_audio_file_ctx, output_packet);                                  
+                if (error < 0) goto error;
+
+                av_packet_unref(output_packet);
+            }
+
+            av_frame_unref(output_frame);
+
+            if (AVERROR(EAGAIN) != error &&
+                AVERROR_EOF     != error) goto error;
+        }
         }
 
         av_packet_unref(input_packet);
