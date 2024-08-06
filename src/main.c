@@ -36,11 +36,16 @@ int main(int const argc, char const *const argv[])
  
     AVCodecContext  *output_audio_stream_encoder      = NULL;
     AVStream        *output_audio_stream              = NULL;
+    AVPacket        *output_packet                    = NULL;
+    AVFrame         *output_frame                     = NULL;
+
 
     int error = 0;
     
-    if (NULL == (input_packet = av_packet_alloc()) ||
-        NULL == (input_frame  = av_frame_alloc())) {
+    if (NULL == (input_packet  = av_packet_alloc()) ||
+        NULL == (input_frame   = av_frame_alloc())  ||
+        NULL == (output_packet = av_packet_alloc()) ||
+        NULL == (output_frame  = av_frame_alloc())) {
         fprintf(stderr, "Error: Could not allocate packet or frame.\n");
         goto error;
     }
@@ -104,6 +109,9 @@ int main(int const argc, char const *const argv[])
 
         if (NULL != input_packet)               av_packet_free(&input_packet);
         if (NULL != input_frame)                av_frame_free(&input_frame);
+        if (NULL != output_packet)              av_packet_free(&output_packet);
+        if (NULL != output_frame)               av_frame_free(&output_frame);
+
         if (NULL != input_audio_file_ctx)       avformat_close_input(&input_audio_file_ctx);
         if (NULL != input_audio_stream_decoder) avcodec_free_context(&input_audio_stream_decoder);
 
