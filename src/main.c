@@ -1,14 +1,13 @@
+#include <libavformat/avio.h>
 #include <libavcodec/codec.h>
 #include <libavcodec/codec_id.h>
 #include <libavcodec/codec_par.h>
-#include <libavcodec/packet.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
 #include <libavutil/avutil.h>
 #include <libavutil/error.h>
-#include <libavutil/frame.h>
-#include <stdio.h>
 
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
+AVCodecContext *config_output_audio_stream_encoder(AVStream *const audio_stream);
 
 AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params);
 
@@ -33,6 +32,7 @@ int main(int const argc, char const *const argv[])
     AVPacket        *input_packet                     = NULL;
     AVFrame         *input_frame                      = NULL;
  
+    AVCodecContext  *output_audio_stream_encoder      = NULL;
     AVStream        *output_audio_stream              = NULL;
 
     int error = 0;
@@ -62,6 +62,9 @@ int main(int const argc, char const *const argv[])
 
     output_audio_stream = avformat_new_stream(output_audio_file_ctx, NULL);
     if (NULL == output_audio_stream) goto error;
+
+    output_audio_stream_encoder = config_output_audio_stream_encoder(output_audio_stream);
+    if (NULL == output_audio_stream_encoder) goto error;
 
             goto error;
         }
@@ -104,11 +107,46 @@ int main(int const argc, char const *const argv[])
             avformat_free_context(output_audio_file_ctx);
             output_audio_file_ctx = NULL;
         }
+        if (NULL != output_audio_stream_encoder) avcodec_free_context(&output_audio_stream_encoder);
        return error; 
 
     error:
         error = 1; 
         goto exit;
+}
+AVCodecContext *config_output_audio_stream_encoder(AVStream *const audio_stream)
+{
+    AVCodecContext *ret   = NULL;
+    AVCodec const  *codec = NULL;
+    int error = 0;
+
+    codec = avcodec_find_encoder(AV_CODEC_ID_MP3);
+    if (NULL == codec) goto error;
+
+    ret = avcodec_alloc_context3(codec);
+    if (NULL == ret) goto error;
+
+    ret->sample_fmt  = AV_SAMPLE_FMT_S16P;
+    ret->bit_rate    = 256000;
+    ret->sample_rate = 48000;
+    av_channel_layout_default(&(ret->ch_layout), 2);
+
+    audio_stream->time_base.num = 1;
+    audio_stream->time_base.den = ret->sample_rate;
+
+    error = avcodec_open2(ret, codec, NULL);
+    if (error < 0) goto error;
+
+    error = avcodec_parameters_from_context(audio_stream->codecpar, ret);
+    if (error < 0) goto error;
+
+    return ret;
+
+    error:
+        if (NULL != ret) avcodec_free_context(&ret);
+
+        fprintf(stderr, "Error: could not open encoder 'MP3'.\n");
+        return NULL;
 }
 
 AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params)
