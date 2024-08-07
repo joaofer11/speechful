@@ -156,8 +156,9 @@ int main(int const argc, char const *const argv[])
             }
 
             av_frame_unref(input_frame);
-            av_freep(converted_samples);
-            converted_samples = NULL;
+
+            av_freep(&converted_samples[0]);
+            av_freep(&converted_samples);
 
             if (error < 0) goto error;
         }
