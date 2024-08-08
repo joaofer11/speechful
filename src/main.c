@@ -22,257 +22,86 @@
 #include <libavutil/macros.h>
 #include <libavutil/error.h>
 
+#define AUDIO 0
 
-SwrContext *resampler_open_context(AVCodecContext *const out_codec,
-                                   AVCodecContext *const src_codec);
+struct Audio {
+    AVFormatContext *file;
+    AVCodecContext  *decoder;
+    AVCodecContext  *encoder;
+    AVStream        *stream;
+    AVPacket        *pkt;
+    AVFrame         *frm;
+};
 
-AVCodecContext *config_output_audio_stream_encoder(AVStream *const audio_stream);
+struct ResamplerParams {
+    uint8_t **channels;
+    size_t    channels_cnt;
+    size_t    samples_cnt;
+    enum AVSampleFormat sample_fmt;
+};
 
-AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params);
-
-int file_read(AVFormatContext *const file,
-              AVPacket        *const packet,
-              AVStream        *const stream);
-
-AVStream *file_find_stream_by_type(AVFormatContext *const file,
-                              enum AVMediaType      const type);
-
-int file_write_header(AVFormatContext *const file);
-
-AVFormatContext *file_open_write_context(char const *const filepath);
-AVFormatContext *file_open_read_context(char const *const filepath);
-
-
-int main(int const argc, char const *const argv[])
+int receive_encoded(AVCodecContext *const encoder, AVPacket *const pkt)
 {
-    AVFormatContext *input_audio_file_ctx                  = NULL;
-    AVFormatContext *output_audio_file_ctx                 = NULL;
-
-    AVCodecContext  *input_audio_stream_decoder            = NULL;
-    AVStream        *input_audio_stream                    = NULL;
-    AVPacket        *input_packet                          = NULL;
-    AVFrame         *input_frame                           = NULL;
- 
-    AVCodecContext  *output_audio_stream_encoder           = NULL;
-    AVStream        *output_audio_stream                   = NULL;
-    AVPacket        *output_packet                         = NULL;
-    AVFrame         *output_frame                          = NULL;
-
-    SwrContext      *resampler                             = NULL;
-    AVAudioFifo     *samples_to_encode                     = NULL;
-
-    size_t           samples_encoded_count                 = 0;
-    bool             has_input_audio_file_been_fully_read  = false;
-
-    int error = 0;
-    
-    if (NULL == (input_packet  = av_packet_alloc()) ||
-        NULL == (input_frame   = av_frame_alloc())  ||
-        NULL == (output_packet = av_packet_alloc()) ||
-        NULL == (output_frame  = av_frame_alloc())) {
-        fprintf(stderr, "Error: Could not allocate packet or frame.\n");
-        goto error;
-    }
-    
-    input_audio_file_ctx = file_open_read_context(argv[1]);
-    if (NULL == input_audio_file_ctx) goto error;
-
-    input_audio_stream = file_find_stream_by_type(input_audio_file_ctx,
-                                                  AVMEDIA_TYPE_AUDIO);
-    if (NULL == input_audio_stream) goto error;
-
-    input_audio_file_ctx = file_open_read_context(argv[1]);
-    if (NULL == input_audio_stream) goto error;
-
-    input_audio_stream_decoder = codec_open_decoder_context(input_audio_stream->codecpar);  
-    if (NULL == input_audio_stream_decoder) goto error;
-    /* Until this point the input audio is ready to be read and decoded. */ 
-
-    output_audio_file_ctx = file_open_write_context(argv[2]);
-    if (error < 0) goto error;
-
-    output_audio_stream = avformat_new_stream(output_audio_file_ctx, NULL);
-    if (NULL == output_audio_stream) goto error;
-
-    output_audio_stream_encoder = config_output_audio_stream_encoder(output_audio_stream);
-    if (NULL == output_audio_stream_encoder) goto error;
-
-    error = file_write_header(output_audio_file_ctx);
-    if (error < 0) goto error;
-
-    resampler = resampler_open_context(output_audio_stream_encoder, 
-                                       input_audio_stream_decoder);
-    if (NULL == resampler) goto error;
-
-    samples_to_encode = av_audio_fifo_alloc(output_audio_stream_encoder->sample_fmt,
-                                            output_audio_stream_encoder->ch_layout.nb_channels,
-                                            output_audio_stream_encoder->frame_size);
-    if (NULL == samples_to_encode) {
-        fprintf(stderr, "Error: could not alloc queue.\n");
-        goto error;
-    }
-
-    /* The real fun starts here... */
-    while (!has_input_audio_file_been_fully_read) {
-        error = file_read(input_audio_file_ctx, input_packet, input_audio_stream);
-        if (error < 0 && AVERROR_EOF != error) goto error;
-
-        has_input_audio_file_been_fully_read = AVERROR_EOF == error;
-
-        /* Send encoded input audio data to the decoder if there's any.
-         *
-         * Otherwise signal the decoder to release any internal
-         * buffered decoded data. */
-        error = avcodec_send_packet(input_audio_stream_decoder,
-                                    has_input_audio_file_been_fully_read
-                                        ? NULL 
-                                        : input_packet);
-        if (error < 0) goto error;
-
-        /* Resample each decoded input audio data from the decoder. */
-        while (0 == (error = avcodec_receive_frame(input_audio_stream_decoder, input_frame))) {
-            uint8_t                   **converted_samples  = NULL;
-            uint8_t const *const *const samples_to_convert = (uint8_t const *const *const)(input_frame->extended_data); 
-
-            /* Alloc temporary storage for the converted 
-             * input audio samples. */
-            error = av_samples_alloc_array_and_samples(&converted_samples,
-                                                        NULL,
-                                                        output_audio_stream_encoder->ch_layout.nb_channels,
-                                                        input_frame->nb_samples,
-                                                        output_audio_stream_encoder->sample_fmt,
-                                                        0);
-            if (error < 0) goto error;
-
-            error = swr_convert(resampler,
-                                converted_samples,  input_frame->nb_samples,
-                                samples_to_convert, input_frame->nb_samples);
-            if (error >= 0) {
-                /* Samples was succesfully converted now save them
-                 * to be encoded later. */
-                error = av_audio_fifo_write(samples_to_encode,
-                                    (void**)converted_samples,
-                                            input_frame->nb_samples);
-            }
-
-            av_frame_unref(input_frame);
-
-            av_freep(&converted_samples[0]);
-            av_freep(&converted_samples);
-
-            if (error < 0) goto error;
-        }
-
-        if (AVERROR(EAGAIN) != error &&
-            AVERROR_EOF     != error) goto error;
-
-        /* Encode the converted input audio samples and write
-         * them into the output audio file. */
-        while (av_audio_fifo_size(samples_to_encode) >= output_audio_stream_encoder->frame_size ||
-              (has_input_audio_file_been_fully_read && av_audio_fifo_size(samples_to_encode) > 0)) {
-            /* Number of samples to encode should ALWAYS be equal to
-             * the maximum size of samples the encoder supports.
-             *
-             * When the number of samples to encode is less than the
-             * maximum size the encoder supports, this mean we
-             * reached the last chunk of data from input audio. */
-            size_t const nb_samples_to_encode = FFMIN(av_audio_fifo_size(samples_to_encode),
-                                                      output_audio_stream_encoder->frame_size);
-
-            output_frame->nb_samples  = nb_samples_to_encode;
-            output_frame->sample_rate = output_audio_stream_encoder->sample_rate;
-            output_frame->format      = output_audio_stream_encoder->sample_fmt;
-            av_channel_layout_copy(&(output_frame->ch_layout),
-                                   &(output_audio_stream_encoder->ch_layout));
-
-            output_frame->pts      = samples_encoded_count;
-            samples_encoded_count += nb_samples_to_encode;
-
-            error = av_frame_get_buffer(output_frame, 0);
-            if (error < 0) goto error;
-
-            error = av_audio_fifo_read(samples_to_encode,
-                              (void**)(output_frame->extended_data),
-                                       nb_samples_to_encode);
-            if (error < 0) goto error;
-
-            error = avcodec_send_frame(output_audio_stream_encoder, output_frame);
-            if (error < 0) goto error;
-
-            while (0 == (error = avcodec_receive_packet(output_audio_stream_encoder, output_packet))) {
-                error = av_write_frame(output_audio_file_ctx, output_packet);                                  
-                if (error < 0) goto error;
-
-                av_packet_unref(output_packet);
-            }
-
-            av_frame_unref(output_frame);
-
-            if (AVERROR(EAGAIN) != error &&
-                AVERROR_EOF     != error) goto error;
-        }
-
-        if (has_input_audio_file_been_fully_read) {
-            /* Tell the output audio encoder to release 
-             * any internal buffered data. */
-            error = avcodec_send_frame(output_audio_stream_encoder, NULL);
-            if (error < 0) goto error;
-
-            while (0 == (error = avcodec_receive_packet(output_audio_stream_encoder, output_packet))) {
-                error = av_write_frame(output_audio_file_ctx, output_packet);                                  
-                if (error < 0) goto error;
-
-                av_packet_unref(output_packet);
-            }
-
-            if (AVERROR(EAGAIN) != error &&
-                AVERROR_EOF     != error) goto error;
-        }
-
-        av_packet_unref(input_packet);
-    }
-
-    error = av_write_trailer(output_audio_file_ctx);
-    if (error < 0) goto error;
-
-    error = 0;
-
-    exit:
-        input_audio_stream  = NULL;
-        output_audio_stream = NULL;
-
-        if (NULL != input_packet)               av_packet_free(&input_packet);
-        if (NULL != input_frame)                av_frame_free(&input_frame);
-        if (NULL != output_packet)              av_packet_free(&output_packet);
-        if (NULL != output_frame)               av_frame_free(&output_frame);
-
-        if (NULL != input_audio_file_ctx)       avformat_close_input(&input_audio_file_ctx);
-        if (NULL != input_audio_stream_decoder) avcodec_free_context(&input_audio_stream_decoder);
-
-        if (NULL != output_audio_file_ctx) {
-            avio_closep(&(output_audio_file_ctx->pb));
-            avformat_free_context(output_audio_file_ctx);
-            output_audio_file_ctx = NULL;
-        }
-        if (NULL != output_audio_stream_encoder) avcodec_free_context(&output_audio_stream_encoder);
-
-        if (NULL != resampler)                   swr_free(&resampler);
-        if (NULL != samples_to_encode)           av_audio_fifo_free(samples_to_encode);
-
-       return error; 
-
-    error:
-        error = 1; 
-        goto exit;
+    int error = avcodec_receive_packet(encoder, pkt);
+    return error;
 }
 
-SwrContext *resampler_open_context(AVCodecContext *const dst_codec,
-                                   AVCodecContext *const src_codec)
+int send_decoded(AVCodecContext *const encoder, AVFrame *const frm)
 {
-    SwrContext *ret = NULL;
+    int error = avcodec_send_frame(encoder, frm);
+    return error;
+}
+
+int receive_decoded(AVCodecContext *const decoder, AVFrame *const frm)
+{
+    int error = avcodec_receive_frame(decoder, frm);
+    return error;
+}
+
+int send_encoded(AVCodecContext *const decoder, AVPacket *const pkt)
+{
+    int error = avcodec_send_packet(decoder, pkt);
+    return error;
+}
+
+AVAudioFifo *alloc_samples_queue(enum AVSampleFormat const samplefmt,
+                                 int const channels_cnt, int const samples_cnt)
+{
+    AVAudioFifo *queue = av_audio_fifo_alloc(samplefmt, channels_cnt, samples_cnt);
+    return queue;
+}
+
+uint8_t **resample(SwrContext *const resampler, struct ResamplerParams const params)
+{
+    uint8_t **converted_samples = NULL;
+    int error = av_samples_alloc_array_and_samples(&converted_samples,
+                                                    NULL,
+                                                    params.channels_cnt,
+                                                    params.samples_cnt,
+                                                    params.sample_fmt,
+                                                    0);
+    if (error < 0) return NULL;
+
+    error = swr_convert(resampler,
+                        converted_samples, 
+                        params.samples_cnt,
+                        (uint8_t const *const *)(params.channels),
+                        params.samples_cnt);
+    if (error < 0) {
+        av_freep(converted_samples);
+        av_freep(&converted_samples);
+    }
+
+    return converted_samples;
+}
+
+SwrContext *open_resampler(AVCodecContext *const dst_codec,
+                           AVCodecContext *const src_codec)
+{
+    SwrContext *resampler = NULL;
     int error = 0;
 
-    error = swr_alloc_set_opts2(&ret,
+    error = swr_alloc_set_opts2(&resampler,
                                     &(dst_codec->ch_layout),
                                       dst_codec->sample_fmt,
                                       dst_codec->sample_rate,
@@ -282,109 +111,112 @@ SwrContext *resampler_open_context(AVCodecContext *const dst_codec,
                                       0, NULL);
     if (error < 0) goto error;
 
-    error = swr_init(ret);
+    error = swr_init(resampler);
     if (error < 0) goto error;
     
-    return ret;
+    return resampler;
 
     error:
-        if (NULL != ret) swr_free(&ret);
+        if (NULL != resampler) swr_free(&resampler);
 
         fprintf(stderr, "Error: could not open resampler.\n");
         return NULL;
 }
 
-AVCodecContext *config_output_audio_stream_encoder(AVStream *const audio_stream)
+AVCodecContext *open_audio_encoder(AVStream *const audio)
 {
-    AVCodecContext *ret   = NULL;
-    AVCodec const  *codec = NULL;
+    AVCodecContext *encoder = NULL;
+    AVCodec const  *codec   = NULL;
+
     int error = 0;
 
     codec = avcodec_find_encoder(AV_CODEC_ID_MP3);
     if (NULL == codec) goto error;
 
-    ret = avcodec_alloc_context3(codec);
-    if (NULL == ret) goto error;
+    encoder = avcodec_alloc_context3(codec);
+    if (NULL == encoder) goto error;
 
-    ret->sample_fmt  = AV_SAMPLE_FMT_S16P;
-    ret->bit_rate    = 256000;
-    ret->sample_rate = 48000;
-    av_channel_layout_default(&(ret->ch_layout), 2);
+    encoder->sample_fmt  = AV_SAMPLE_FMT_S16P;
+    encoder->bit_rate    = 256000;
+    encoder->sample_rate = 48000;
+    av_channel_layout_default(&(encoder->ch_layout), 2);
 
-    audio_stream->time_base.num = 1;
-    audio_stream->time_base.den = ret->sample_rate;
+    audio->time_base.num = 1;
+    audio->time_base.den = encoder->sample_rate;
 
-    error = avcodec_open2(ret, codec, NULL);
+    error = avcodec_open2(encoder, codec, NULL);
     if (error < 0) goto error;
 
-    error = avcodec_parameters_from_context(audio_stream->codecpar, ret);
+    error = avcodec_parameters_from_context(audio->codecpar, encoder);
     if (error < 0) goto error;
 
-    return ret;
+    return encoder;
 
     error:
-        if (NULL != ret) avcodec_free_context(&ret);
+        if (NULL != encoder) avcodec_free_context(&encoder);
 
         fprintf(stderr, "Error: could not open encoder 'MP3'.\n");
         return NULL;
 }
 
-AVCodecContext *codec_open_decoder_context(AVCodecParameters *const params)
+
+AVCodecContext *open_decoder(AVCodecParameters *const params)
 {
-    AVCodecContext *ret   = NULL;
-    AVCodec const  *codec = NULL;
+    AVCodecContext *decoder = NULL;
+    AVCodec const  *codec   = NULL;
 
     int error = 0;
     
     codec = avcodec_find_decoder(params->codec_id);
     if (NULL == codec) goto error;
 
-    ret = avcodec_alloc_context3(codec);
-    if (NULL == ret) goto error;
+    decoder = avcodec_alloc_context3(codec);
+    if (NULL == decoder) goto error;
 
-    error = avcodec_parameters_to_context(ret, params);
+    error = avcodec_parameters_to_context(decoder, params);
     if (error < 0) goto error;
 
-    error = avcodec_open2(ret, codec, NULL);
+    error = avcodec_open2(decoder, codec, NULL);
     if (error < 0) goto error;
     
-    return ret;
+    return decoder;
 
     error:
-        if (NULL != ret) avcodec_free_context(&ret);
+        if (NULL != decoder) avcodec_free_context(&decoder);
 
         fprintf(stderr, "Error: could not open decoder '%s'.\n", avcodec_get_name(params->codec_id));
-        return NULL;
+        return NULL; 
 }
 
-AVStream *file_find_stream_by_type(AVFormatContext *const file,
-                              enum AVMediaType      const type)
-{
-    for (size_t i = 0; i < file->nb_streams; ++i)
-        if (type == file->streams[i]->codecpar->codec_type)
-            return file->streams[i];
-
-    fprintf(stderr, "Error: No %s was found in file '%s'.\n",
-                     av_get_media_type_string(type),
-                     file->url);
-    return NULL;
-}
-
-int file_read(AVFormatContext *const file,
-              AVPacket        *const packet,
-              AVStream        *const stream)
+int readfile(AVPacket *const pkt, AVStream *const stream, AVFormatContext *const file)
 {
     int error = 0;
-    while (0 == (error = av_read_frame(file, packet))) {
-        if (packet->stream_index == stream->index) return 0;
 
-        av_packet_unref(packet);
+    while (0 == (error = av_read_frame(file, pkt))) {
+        if (pkt->stream_index == stream->index) return 0;
+
+        av_packet_unref(pkt);
     }
 
     return error;
 }
 
-int file_write_header(AVFormatContext *const file)
+
+AVStream *ask_to_select_stream(AVFormatContext *const file, uint8_t const which)
+{
+    static enum AVMediaType const dict[] = {AVMEDIA_TYPE_AUDIO};
+
+    for (size_t i = 0; i < file->nb_streams; ++i)
+        if (dict[which] == file->streams[i]->codecpar->codec_type)
+            return file->streams[i];
+
+    fprintf(stderr, "Error: No %s was found in file '%s'.\n",
+                     av_get_media_type_string(dict[which]),
+                     file->url);
+    return NULL; 
+}
+
+int write_file_header(AVFormatContext *const file)
 {
     int error = avformat_write_header(file, NULL);
     if (error < 0) {
@@ -395,51 +227,240 @@ int file_write_header(AVFormatContext *const file)
     return 0;
 }
 
-AVFormatContext *file_open_write_context(char const *const filepath)
+AVFormatContext *open_file_for_write(char const *const filepath)
 {
-    AVFormatContext *ret = NULL;
+    AVFormatContext *file = NULL;
     int error = 0;
 
-    ret = avformat_alloc_context();
-    if (NULL == ret) goto error;
+    file = avformat_alloc_context();
+    if (NULL == file) goto error;
 
-    error = avio_open(&(ret->pb), filepath, AVIO_FLAG_WRITE);
+    error = avio_open(&(file->pb), filepath, AVIO_FLAG_WRITE);
     if (error < 0) goto error;
 
-    ret->url     = av_strdup(filepath);
-    ret->oformat = av_guess_format(NULL, filepath, NULL);
-    if (NULL == ret->url ||
-        NULL == ret->oformat) goto error;
+    file->url     = av_strdup(filepath);
+    file->oformat = av_guess_format(NULL, filepath, NULL);
+    if (NULL == file->url ||
+        NULL == file->oformat) goto error;
 
-    return ret;
+    return file;
 
     error:
-        if (NULL != ret) {
-            if (NULL != ret->pb) avio_closep(&(ret->pb));
-            avformat_free_context(ret);
+        if (NULL != file) {
+            if (NULL != file->pb) avio_closep(&(file->pb));
+            avformat_free_context(file);
         }
 
         fprintf(stderr, "Error: could not open file '%s'.\n", filepath);
         return NULL;
 }
 
-AVFormatContext *file_open_read_context(const char *const filepath)
-{
-    AVFormatContext *ret = NULL;
+AVFormatContext *open_file_for_read(char const *const filepath)
+{ 
+    AVFormatContext *file = NULL;
     int error = 0;
 
-    error = avformat_open_input(&ret, filepath, NULL, NULL);
-    if (error < 0) goto error;
+    error = avformat_open_input(&file, filepath, NULL, NULL);
+    if (error < 0) goto failure;
 
-    error = avformat_find_stream_info(ret, NULL);
-    if (error < 0) goto error;
+    error = avformat_find_stream_info(file, NULL);
+    if (error < 0) goto failure;
 
-    return ret;
+    return file;
 
-    error:
+    failure:
         fprintf(stderr, "Error: Could not open file '%s'.\n", filepath);
         fprintf(stderr, "Reason: %s\n", av_err2str(error));
-        avformat_close_input(&ret);
+
+        if (NULL != file)
+            avformat_close_input(&file);
         
         return NULL;
+}
+
+int main(int const argc, char const *const argv[])
+{
+    struct Audio in_audio  = {0};
+    struct Audio out_audio = {0};
+
+    SwrContext  *resampler = NULL;
+    AVAudioFifo *samples_to_encode = NULL;
+
+    int error = 0;
+    
+    if (NULL == (in_audio.pkt  = av_packet_alloc()) ||
+        NULL == (in_audio.frm  = av_frame_alloc())  ||
+        NULL == (out_audio.pkt = av_packet_alloc()) ||
+        NULL == (out_audio.frm = av_frame_alloc())) {
+        fprintf(stderr, "Error: Could not allocate packet or frame.\n");
+        goto failure;
+    }
+    
+    in_audio.file = open_file_for_read(argv[1]);
+    if (NULL == in_audio.file) goto failure;
+
+    in_audio.stream = ask_to_select_stream(in_audio.file, AUDIO);
+    if (NULL == in_audio.stream) goto failure;
+
+    in_audio.decoder = open_decoder(in_audio.stream->codecpar);  
+    if (NULL == in_audio.decoder) goto failure;
+
+    in_audio.decoder->pkt_timebase = in_audio.stream->time_base;
+    /* Until this point the input audio is ready to be read and decoded. */ 
+
+    out_audio.file = open_file_for_write(argv[2]);
+    if (NULL == out_audio.file) goto failure;
+
+    out_audio.stream = avformat_new_stream(out_audio.file, NULL);
+    if (NULL == out_audio.stream) goto failure;
+
+    out_audio.encoder = open_audio_encoder(out_audio.stream);
+    if (NULL == out_audio.encoder) goto failure;
+
+    error = write_file_header(out_audio.file);
+    if (error < 0) goto failure;
+
+    resampler = open_resampler(out_audio.encoder, 
+                               in_audio.decoder);
+    if (NULL == resampler) goto failure;
+
+    samples_to_encode = alloc_samples_queue(out_audio.encoder->sample_fmt,
+                                            out_audio.encoder->ch_layout.nb_channels,
+                                            out_audio.encoder->frame_size);
+    if (NULL == samples_to_encode) {
+        fprintf(stderr, "Error: could not alloc queue.\n");
+        goto failure;
+    }
+
+    do {
+        size_t samples_encoded_cnt = 0;
+        bool   has_some_file_been_fully_read = false;
+
+        while (!has_some_file_been_fully_read) {
+            error = readfile(in_audio.pkt, in_audio.stream, in_audio.file);
+
+            if (error < 0) {
+                if (AVERROR_EOF != error) goto failure;
+                has_some_file_been_fully_read = true;
+            }
+
+            error = send_encoded(in_audio.decoder, has_some_file_been_fully_read
+                                                   ? NULL 
+                                                   : in_audio.pkt);
+            if (error < 0) goto failure;
+            
+            while (0 == (error = receive_decoded(in_audio.decoder, in_audio.frm))) {
+                struct ResamplerParams params = {
+                    .channels     = in_audio.frm->extended_data,
+                    .channels_cnt = in_audio.decoder->ch_layout.nb_channels,
+                    .samples_cnt  = in_audio.frm->nb_samples,
+                    .sample_fmt   = in_audio.decoder->sample_fmt
+                };
+
+                uint8_t **converted_samples = resample(resampler, params);
+                if (NULL == converted_samples) goto failure;
+
+                error = av_audio_fifo_write(samples_to_encode,
+                                            (void**)(converted_samples),
+                                            in_audio.frm->nb_samples);
+                av_frame_unref(in_audio.frm);
+
+                av_freep(converted_samples);
+                av_freep(&converted_samples);
+
+                if (error < 0) goto failure;
+            }
+            if (AVERROR(EAGAIN) != error &&
+                AVERROR_EOF     != error) goto failure;
+
+            while (av_audio_fifo_size(samples_to_encode) >= out_audio.encoder->frame_size ||
+                  (has_some_file_been_fully_read && av_audio_fifo_size(samples_to_encode) > 0)) {
+                size_t const samples_to_encode_cnt = FFMIN(av_audio_fifo_size(samples_to_encode),
+                                                           out_audio.encoder->frame_size);
+
+                out_audio.frm->nb_samples  = samples_to_encode_cnt;
+                out_audio.frm->sample_rate = out_audio.encoder->sample_rate;
+                out_audio.frm->format      = out_audio.encoder->sample_fmt;
+
+                av_channel_layout_copy(&(out_audio.frm->ch_layout),
+                                       &(out_audio.encoder->ch_layout));
+
+                out_audio.frm->pts   = samples_encoded_cnt;
+                samples_encoded_cnt += samples_to_encode_cnt;
+
+                error = av_frame_get_buffer(out_audio.frm, 0);
+                if (error < 0) goto failure;
+
+                error = av_audio_fifo_read(samples_to_encode,
+                                           (void**)(out_audio.frm->extended_data),
+                                           samples_to_encode_cnt);
+                if (error < 0) goto failure;
+
+                error = send_decoded(out_audio.encoder, out_audio.frm);
+                if (error < 0) goto failure;
+
+                while (0 == (error = receive_encoded(out_audio.encoder, out_audio.pkt))) {
+                    error = av_write_frame(out_audio.file, out_audio.pkt);                                  
+                    if (error < 0) goto failure;
+
+                    av_packet_unref(out_audio.pkt);
+                }
+
+                av_frame_unref(out_audio.frm);
+
+                if (AVERROR(EAGAIN) != error &&
+                    AVERROR_EOF     != error) goto failure;
+            }
+
+            if (has_some_file_been_fully_read) {
+                error = avcodec_send_frame(out_audio.encoder, NULL);
+                if (error < 0) goto failure;
+
+                while (0 == (error = avcodec_receive_packet(out_audio.encoder, out_audio.pkt))) {
+                    error = av_write_frame(out_audio.file, out_audio.pkt);                                  
+                    if (error < 0) goto failure;
+
+                    av_packet_unref(out_audio.pkt);
+                }
+
+                if (AVERROR(EAGAIN) != error &&
+                    AVERROR_EOF     != error) goto failure;
+            }
+
+            av_packet_unref(in_audio.pkt);
+        }
+    } while (0);
+
+    error = av_write_trailer(out_audio.file);
+    if (error < 0) goto failure;
+
+    error = 0;
+
+    exit:
+        in_audio.stream  = NULL;
+        out_audio.stream = NULL;
+
+        if (NULL != in_audio.pkt)               av_packet_free(&(in_audio.pkt));
+        if (NULL != in_audio.frm)               av_frame_free(&(in_audio.frm));
+        if (NULL != out_audio.pkt)              av_packet_free(&(out_audio.pkt));
+        if (NULL != out_audio.frm)              av_frame_free(&(out_audio.frm));
+
+        if (NULL != in_audio.file)              avformat_close_input(&(in_audio.file));
+        if (NULL != in_audio.decoder)           avcodec_free_context(&(in_audio.decoder));
+
+        if (NULL != out_audio.file) {
+            avio_closep(&(out_audio.file->pb));
+            avformat_free_context(out_audio.file);
+            out_audio.file = NULL;
+        }
+        if (NULL != out_audio.encoder) avcodec_free_context(&(out_audio.encoder));
+
+        if (NULL != resampler)                   swr_free(&resampler);
+        if (NULL != samples_to_encode)           av_audio_fifo_free(samples_to_encode);
+
+       return error; 
+
+    failure:
+        error = 1; 
+        goto exit;
 }
