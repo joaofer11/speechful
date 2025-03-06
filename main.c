@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 
 static void error(const char *msg, ...)
@@ -28,6 +29,31 @@ static int format_open_input(struct AVFormatContext **fmt_ctx, const char *filep
 		return ret;
 	if ((ret = avformat_find_stream_info(*fmt_ctx, NULL)) < 0)
 		avformat_close_input(fmt_ctx);
+
+	return ret;
+}
+
+static int codec_open_decoder(struct AVCodecContext **dec_ctx, struct AVCodecParameters *decpar)
+{
+	const struct AVCodec *dec;
+	int ret;
+
+	if (!(dec = avcodec_find_decoder(decpar->codec_id)))
+		return AVERROR_DECODER_NOT_FOUND;
+
+	if (!(*dec_ctx = avcodec_alloc_context3(dec)))
+		return AVERROR(ENOMEM);
+
+	if ((ret = avcodec_parameters_to_context(*dec_ctx, decpar)) < 0)
+		goto err_free_dec_ctx;
+
+	if ((ret = avcodec_open2(*dec_ctx, dec, NULL)) < 0)
+		goto err_free_dec_ctx;
+
+	return 0;
+
+err_free_dec_ctx:
+	avcodec_free_context(dec_ctx);
 
 	return ret;
 }
@@ -113,6 +139,7 @@ int main(int argc, const char **argv)
 	const char *in_audio_filepath = argv[1];
 	struct AVFormatContext *in_audio_fmt_ctx;
 	struct AVStream *in_audio_stream;
+	struct AVCodecContext *audio_dec;
 	int ret;
 
 	in_audio_fmt_ctx = NULL;
@@ -133,9 +160,19 @@ int main(int argc, const char **argv)
 
 	in_audio_stream = in_audio_fmt_ctx->streams[ret];
 
+	audio_dec = NULL;
+	if ((ret = codec_open_decoder(&audio_dec, in_audio_stream->codecpar)) < 0) {
+		error("%s: failed to open decoder: %s\n",
+		      avcodec_get_name(in_audio_stream->codecpar->codec_id),
+		      av_err2str(ret));
+	}
+
 end:
 	if (in_audio_fmt_ctx)
 		avformat_close_input(&in_audio_fmt_ctx);
+
+	if (audio_dec)
+		avcodec_free_context(&audio_dec);
 
 	return 0;
 }
