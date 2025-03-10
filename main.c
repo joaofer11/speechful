@@ -374,7 +374,7 @@ static int choose_stream(struct AVStream **streams, int nr_streams,
 
 	show_streams_info(filtered, nr_filtered);
 
-	/* TODO: show the welcome message here! */
+	printf("> Choose the %s stream you wish: ", av_get_media_type_string(which));
 	while (!chosen) {
 		int n;
 		if (scanf("%d", &n) == 1
