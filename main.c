@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <assert.h>
+
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
@@ -123,6 +124,7 @@ static int prepare_audio_frame_for_encoding(struct AVFrame* frame, int samples,
 	return ret;
 }
 
+/* TODO: Add the optional options for the underlying FFmpeg. */
 static int format_open_input(struct AVFormatContext **fmt_ctx, const char *filepath)
 {
 	int ret;
@@ -181,6 +183,7 @@ static int format_write_audio_data(struct AVFormatContext *fmt,
 				if ((ret = prepare_audio_frame_for_encoding(frame, dequeued, enc)) < 0)
 					goto end;
 
+				/* WARNING: This is wrong! Use `av_rescale_q()`. */
 				frame->pts = *next_pts;
 				*next_pts += dequeued;
 
@@ -397,6 +400,7 @@ end:
 
 int main(int argc, const char **argv)
 {
+	/* TODO?: Parse the argv. Some arguments will be important. */
 	const char *in_audio_filepath = argv[1], *out_audio_filepath = argv[2], *sub_filepath = argv[3];
 	struct AVFormatContext *sub_fmt_ctx = NULL, *in_audio_fmt_ctx = NULL, *out_audio_fmt_ctx = NULL;
 	struct AVStream *sub_st = NULL, *in_audio_st = NULL, *out_audio_st = NULL;
@@ -425,8 +429,8 @@ int main(int argc, const char **argv)
 
 	in_audio_st = in_audio_fmt_ctx->streams[ret];
 
-	/* We got a subtitle file? */
 	if (argc - 1 >= 3) {
+		/* We got a subtitle file. */
 		if ((ret = format_open_input(&sub_fmt_ctx, sub_filepath)) < 0) {
 			error("%s: failed to open media file: %s\n", sub_filepath, av_err2str(ret));
 			goto end;
@@ -480,14 +484,7 @@ int main(int argc, const char **argv)
 		      av_err2str(ret));
 	}
 
-	/*
-	 * At this point, we can start setting up the output MP3 media file.
-	 * This is the file where the extracted speech will be into.
-	 *
-	 * Before we set up the container format, we first need to set up the encoder (codec).
-	 * This is necessary so we can properly record some codec settings of
-	 * the audio track that will be embedded into the container format.
-	 */
+	/* TODO: Let the user choose the quality of audio: low, medium or high. */
 	ret = codec_open_audio_encoder(
 		&audio_enc,
 		AV_CODEC_ID_MP3,
@@ -515,18 +512,17 @@ int main(int argc, const char **argv)
 		goto end;
 	}
 
-	/* Embed the audio track. */
 	if (!(out_audio_st = avformat_new_stream(out_audio_fmt_ctx, NULL))) {
 		error("%s: failed to attach audio track: out of memory.\n", out_audio_filepath);
 		goto end;
 	}
 
-	/* Save the audio track codec settings. */
 	if ((ret = avcodec_parameters_from_context(out_audio_st->codecpar, audio_enc)) < 0) {
 		error("%s: failed to record encoder settings: %s\n",
 		       avcodec_get_name(audio_enc->codec->id), av_err2str(ret));
 		goto end;
 	}
+
 	out_audio_st->time_base.num = 1;
 	out_audio_st->time_base.den = audio_enc->sample_rate;
 
@@ -535,16 +531,15 @@ int main(int argc, const char **argv)
 		goto end;
 	}
 
-	/* The output MP3 media file is all set. */
-
 	if ((ret = resampler_open(&resampler, audio_enc, audio_dec)) < 0) {
 		error("Failed to initialize audio resampler: %s\n", av_err2str(ret));
 		goto end;
 	}
 
 	/*
-	 * I don't know if the MP3 encoder (codec) accepts variable frame sizes,
-	 * but if it doesn't, we need a queue to keep track of the desired frame size.
+	 * Some encoders doesn't accept variable frame sizes, in such case it
+	 * is pretty convenient to use a queue in order to keep track of desired encoder
+	 * frame size.
 	 */
 	if (!codec_supports(audio_enc->codec, AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
 	    && !(resampled_queue = av_audio_fifo_alloc(audio_enc->sample_fmt,
@@ -559,6 +554,7 @@ int main(int argc, const char **argv)
 		goto end;
 	}
 
+	/* NOTE: It seems that this code is leaking the memory somewhere. */
 	while ((ret = read_packet(sub_fmt_ctx, sub_st->index, pkt)) == 0) {
 		struct range sub_time_in_ms = {0};
 
