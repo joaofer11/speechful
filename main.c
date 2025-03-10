@@ -135,11 +135,11 @@ static int format_open_input(struct AVFormatContext **fmt_ctx, const char *filep
 	return ret;
 }
 
-static int format_write_audio_frame(struct AVFormatContext *fmt,
-                                    struct AVCodecContext *enc,
-                                    struct AVAudioFifo *queue,
-                                    const u8 *const *buf, int samples,
-                                    i64 *next_pts)
+static int format_write_audio_data(struct AVFormatContext *fmt,
+                                   struct AVCodecContext *enc,
+                                   struct AVAudioFifo *queue,
+                                   const u8 *const *buf, int samples,
+                                   i64 *next_pts)
 {
 	struct AVPacket *pkt;
 	struct AVFrame *frame;
@@ -649,7 +649,7 @@ int main(int argc, const char **argv)
 					goto end;
 				}
 
-				ret = format_write_audio_frame(out_audio_fmt_ctx, audio_enc, resampled_queue,
+				ret = format_write_audio_data(out_audio_fmt_ctx, audio_enc, resampled_queue,
 				                               (const u8 *const *)resampled_buf, speech_samples,
 				                               &next_audio_pts);
 
@@ -701,7 +701,7 @@ int main(int argc, const char **argv)
 			goto end;
 		}
 
-		ret = format_write_audio_frame(out_audio_fmt_ctx, audio_enc, resampled_queue,
+		ret = format_write_audio_data(out_audio_fmt_ctx, audio_enc, resampled_queue,
 		            (const u8 *const *)resampled_buf, resampled_samples, &next_audio_pts);
 
 		av_freep(resampled_buf);
@@ -719,7 +719,7 @@ int main(int argc, const char **argv)
 	}
 
 	/* Flush the encoder and the container format. */
-	if ((ret = format_write_audio_frame(out_audio_fmt_ctx, audio_enc, resampled_queue, NULL, 0,
+	if ((ret = format_write_audio_data(out_audio_fmt_ctx, audio_enc, resampled_queue, NULL, 0,
 	                                    &next_audio_pts)) < 0) {
 	        error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
 		goto end;
