@@ -1,14 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
+#include <assert.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
 #include <libavutil/avutil.h>
 #include <libavutil/audio_fifo.h>
 
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define codec_supports(c, what) ((c)->capabilities & (what))
+
+typedef uint8_t u8;
+typedef int64_t i64;
+
+struct range {
+	i64 start;
+	i64 end;
+};
 
 struct audio_encoder_settings {
 	int                 channels;
@@ -33,6 +45,84 @@ static void warn(const char *msg, ...)
 	va_end(va);
 }
 
+static int extract_audio_region(u8 ***dst, const u8 *const *src, int samples,
+                                int channels, enum AVSampleFormat sample_fmt,
+                                struct range length, struct range region)
+{
+	int skip, extract;
+	int ret;
+
+	assert(region.start >= length.start && region.end <= length.end);
+	assert(length.end - length.start > 0);
+	assert(region.end - region.start > 0);
+
+	{
+		i64 whole = length.end - length.start;
+		double fraction;
+
+		/* The offset of the region mark from the beginning. */
+		fraction = (double)(region.start - length.start) / whole;
+		skip = fraction * samples;
+
+		fraction = (double)(region.end - region.start) / whole;
+		extract = fraction * samples;
+	}
+
+	if ((ret = av_samples_alloc_array_and_samples(dst, NULL, channels, extract, sample_fmt, 0)) < 0)
+		return ret;
+
+	if ((ret = av_samples_copy(*dst, (u8 *const *)src, 0, skip, extract, channels, sample_fmt)) < 0) {
+		av_freep(*dst);
+		av_freep(dst);
+		return ret;
+	}
+
+	return extract;
+}
+
+static inline i64 tb2ms(struct AVRational timebase, i64 n)
+{
+	i64 ret = av_rescale_q(n, timebase, (struct AVRational){1, 1000});
+	return ret;
+}
+
+static inline i64 secs2tb(struct AVRational timebase, i64 secs)
+{
+	i64 ret = av_rescale_q(secs, (struct AVRational){1, 1000}, timebase);
+	return ret;
+}
+
+static struct range get_overlapped_region(struct range a, struct range b)
+{
+	struct range ret;
+
+	assert(!(a.end <= b.start) && !(a.start >= b.end));
+
+	ret.start = (a.start - b.start < 0) ? b.start : a.start;
+	ret.end   = (a.end   - b.end   < 0) ? a.end   : b.end;
+
+	return ret;
+}
+
+static int prepare_audio_frame_for_encoding(struct AVFrame* frame, int samples,
+                                            const struct AVCodecContext *enc)
+{
+	int ret;
+
+	if ((ret = av_channel_layout_copy(&frame->ch_layout, &enc->ch_layout)) < 0)
+		return ret;
+
+	frame->format      = enc->sample_fmt;
+	frame->sample_rate = enc->sample_rate;
+	frame->time_base   = enc->time_base;
+	frame->nb_samples  = samples;
+
+	if ((ret = av_frame_get_buffer(frame, 0)) < 0)
+		av_frame_unref(frame);
+
+	return ret;
+}
+
 static int format_open_input(struct AVFormatContext **fmt_ctx, const char *filepath)
 {
 	int ret;
@@ -41,6 +131,101 @@ static int format_open_input(struct AVFormatContext **fmt_ctx, const char *filep
 		return ret;
 	if ((ret = avformat_find_stream_info(*fmt_ctx, NULL)) < 0)
 		avformat_close_input(fmt_ctx);
+
+	return ret;
+}
+
+static int format_write_audio_frame(struct AVFormatContext *fmt,
+                                    struct AVCodecContext *enc,
+                                    struct AVAudioFifo *queue,
+                                    const u8 *const *buf, int samples,
+                                    i64 *next_pts)
+{
+	struct AVPacket *pkt;
+	struct AVFrame *frame;
+	bool eof_received = !buf || !samples;
+	int ret = 0;
+
+	if (!(pkt = av_packet_alloc()))
+		return AVERROR(ENOMEM);
+
+	if (!(frame = av_frame_alloc())) {
+		av_packet_free(&pkt);
+		return AVERROR(ENOMEM);
+	}
+
+	if (buf) {
+		if (queue) {
+			if ((ret = av_audio_fifo_write(queue, (void *const *)buf, samples)) < 0)
+				goto end;
+		}
+	}
+
+	/* TODO: Handle encoders that doesn't accept variable frame sizes. */
+	for (;;) {
+		if (queue) {
+			int dequeued = MIN(av_audio_fifo_size(queue), enc->frame_size);
+
+			if (!dequeued) {
+				if (!eof_received) {
+					ret = AVERROR(EAGAIN);
+					goto end;
+				}
+
+				if ((ret = avcodec_send_frame(enc, NULL)) < 0)
+					goto end;
+			} else {
+				if (dequeued < enc->frame_size && !eof_received)
+					break;
+
+				if ((ret = prepare_audio_frame_for_encoding(frame, dequeued, enc)) < 0)
+					goto end;
+
+				frame->pts = *next_pts;
+				*next_pts += dequeued;
+
+				if ((ret = av_audio_fifo_read(queue, (void *const *)frame->extended_data, dequeued)) < 0)
+					goto end;
+
+				if ((ret = avcodec_send_frame(enc, frame)) < 0)
+					goto end;
+
+				av_frame_unref(frame);
+			}
+		}
+
+		while ((ret = avcodec_receive_packet(enc, pkt)) == 0) {
+			ret = av_write_frame(fmt, pkt);
+			av_packet_unref(pkt);
+			if (ret < 0)
+				goto end;
+		}
+
+		if (ret == AVERROR_EOF) {
+			ret = av_write_trailer(fmt);
+			break;
+		}
+
+		if (ret != AVERROR(EAGAIN))
+			break;
+	}
+
+end:
+	av_packet_free(&pkt);
+	av_frame_free(&frame);
+	return ret;
+}
+
+static int read_packet(struct AVFormatContext *fmt_ctx, int stream_idx,
+                       struct AVPacket *pkt)
+{
+	int ret;
+
+	while ((ret = av_read_frame(fmt_ctx, pkt)) == 0) {
+		if (pkt->stream_index == stream_idx)
+			break;
+		av_packet_unref(pkt);
+	}
 
 	return ret;
 }
@@ -117,6 +302,22 @@ static int resampler_open(struct SwrContext          **resampler,
 	return ret;
 }
 
+static int resample(struct SwrContext *resampler, u8 ***dst, const u8 *const *src,
+                    int samples, int dst_channels, enum AVSampleFormat dst_sample_fmt)
+{
+	int ret;
+
+	if ((ret = av_samples_alloc_array_and_samples(dst, NULL, dst_channels, samples, dst_sample_fmt, 0)) < 0)
+		return ret;
+
+	if ((ret = swr_convert(resampler, *dst, samples, src, samples)) < 0) {
+		av_freep(*dst);
+		av_freep(dst);
+	}
+
+	return ret;
+}
+
 static int filter_streams(struct AVStream ***dst, struct AVStream **src, int n,
                           enum AVMediaType which)
 {
@@ -173,6 +374,7 @@ static int choose_stream(struct AVStream **streams, int nr_streams,
 
 	show_streams_info(filtered, nr_filtered);
 
+	/* TODO: show the welcome message here! */
 	while (!chosen) {
 		int n;
 		if (scanf("%d", &n) == 1
@@ -201,6 +403,10 @@ int main(int argc, const char **argv)
 	struct AVCodecContext *audio_dec = NULL, *audio_enc = NULL;
 	struct SwrContext *resampler = NULL;
 	struct AVAudioFifo *resampled_queue = NULL;
+	struct AVPacket *pkt = NULL;
+	struct AVFrame *frame = NULL;
+	i64 prev_sub_ended_at = 0;
+	i64 next_audio_pts = 0;
 	int ret;
 
 	if ((ret = format_open_input(&in_audio_fmt_ctx, in_audio_filepath)) < 0) {
@@ -345,6 +551,177 @@ int main(int argc, const char **argv)
 	    	                                      audio_enc->ch_layout.nb_channels,
 	    	                                      1))) {
 		error("Failed to alloc queue: out of memory.\n");
+		goto end;
+	}
+
+	if (!(pkt = av_packet_alloc()) || !(frame = av_frame_alloc())) {
+		error("Failed to alloc packet or frame: out of memory.\n");
+		goto end;
+	}
+
+	while ((ret = read_packet(sub_fmt_ctx, sub_st->index, pkt)) == 0) {
+		struct range sub_time_in_ms = {0};
+
+		sub_time_in_ms.start = tb2ms(sub_st->time_base, pkt->pts) - 1000;
+		sub_time_in_ms.end   = tb2ms(sub_st->time_base, pkt->pts + pkt->duration) + 1000;
+
+		av_packet_unref(pkt);
+
+		if (sub_time_in_ms.start < prev_sub_ended_at)
+			sub_time_in_ms.start = prev_sub_ended_at;
+
+		prev_sub_ended_at = sub_time_in_ms.end;
+
+		if ((ret = av_seek_frame(
+		               in_audio_fmt_ctx,
+		               in_audio_st->index,
+		               secs2tb(in_audio_st->time_base, sub_time_in_ms.start),
+		               AVSEEK_FLAG_BACKWARD)) < 0) {
+			error("Failed to sync audio with subtitle: %s\n", av_err2str(ret));
+			goto end;
+		}
+
+		while ((ret = read_packet(in_audio_fmt_ctx, in_audio_st->index, pkt)) == 0) {
+			struct range audio_time_in_ms = {0};
+
+			audio_time_in_ms.start = tb2ms(in_audio_st->time_base, pkt->pts);
+			audio_time_in_ms.end   = tb2ms(in_audio_st->time_base, pkt->pts + pkt->duration);
+
+			if (audio_time_in_ms.end <= sub_time_in_ms.start) {
+				av_packet_unref(pkt);
+				continue;
+			}
+
+			if (audio_time_in_ms.start >= sub_time_in_ms.end) {
+				av_packet_unref(pkt);
+				break;
+			}
+
+			if ((ret = avcodec_send_packet(audio_dec, pkt)) < 0) {
+				error("Failed to decode audio data: %s\n", av_err2str(ret));
+				goto end;
+			}
+
+			av_packet_unref(pkt);
+
+			while ((ret = avcodec_receive_frame(audio_dec, frame)) == 0) {
+				struct range region;
+				u8         **speech_buf, **resampled_buf;
+				int          speech_samples;
+
+				audio_time_in_ms.start = tb2ms(in_audio_st->time_base, frame->pts);
+				audio_time_in_ms.end   = tb2ms(in_audio_st->time_base, frame->pts + frame->duration);
+
+				if (audio_time_in_ms.end <= sub_time_in_ms.start) {
+					av_frame_unref(frame);
+					continue;
+				}
+
+				if (audio_time_in_ms.start >= sub_time_in_ms.end) {
+					av_frame_unref(frame);
+					avcodec_flush_buffers(audio_dec);
+					break;
+				}
+
+				region = get_overlapped_region(audio_time_in_ms, sub_time_in_ms);
+
+				ret = speech_samples =
+					extract_audio_region(&speech_buf, (const u8 *const *)frame->extended_data,
+					                     frame->nb_samples, audio_dec->ch_layout.nb_channels,
+					                     audio_dec->sample_fmt, audio_time_in_ms, region);
+
+				av_frame_unref(frame);
+
+				if (ret < 0) {
+					error("Failed to extract audio region: %s\n", av_err2str(ret));
+					goto end;
+				}
+
+				ret = speech_samples =
+					resample(resampler, &resampled_buf, (const u8 *const *)speech_buf,
+					         speech_samples, audio_enc->ch_layout.nb_channels, audio_enc->sample_fmt);
+
+				av_freep(speech_buf);
+				av_freep(&speech_buf);
+
+				if (ret < 0) {
+					error("Failed to resample audio samples: %s\n", av_err2str(ret));
+					goto end;
+				}
+
+				ret = format_write_audio_frame(out_audio_fmt_ctx, audio_enc, resampled_queue,
+				                               (const u8 *const *)resampled_buf, speech_samples,
+				                               &next_audio_pts);
+
+				av_freep(resampled_buf);
+				av_freep(&resampled_buf);
+
+				if (ret < 0 && ret != AVERROR(EAGAIN)) {
+					error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
+					goto end;
+				}
+			}
+
+			if (ret < 0 && ret != AVERROR(EAGAIN)) {
+				error("Failed to decode audio data: %s\n", av_err2str(ret));
+				goto end;
+			}
+		}
+
+		if (ret < 0) {
+			if (ret == AVERROR_EOF)
+				break;
+			error("%s: failed to read audio data: %s\n", in_audio_filepath, av_err2str(ret));
+			goto end;
+		}
+	}
+
+	if (ret != AVERROR_EOF) {
+		error("%s: failed to read subtitle data: %s\n", sub_filepath, av_err2str(ret));
+		goto end;
+	}
+
+	if ((ret = avcodec_send_packet(audio_dec, NULL)) < 0) {
+		error("Failed to flush audio decoder: %s\n", av_err2str(ret));
+		goto end;
+	}
+
+	while ((ret = avcodec_receive_frame(audio_dec, frame)) == 0) {
+		u8 **resampled_buf;
+		int  resampled_samples;
+
+		ret = resampled_samples =
+			resample(resampler, &resampled_buf, (const u8 *const *)frame->extended_data,
+			         frame->nb_samples, audio_enc->ch_layout.nb_channels, audio_enc->sample_fmt);
+
+		av_frame_unref(frame);
+
+		if (ret < 0) {
+			error("Failed to resample audio samples: %s\n", av_err2str(ret));
+			goto end;
+		}
+
+		ret = format_write_audio_frame(out_audio_fmt_ctx, audio_enc, resampled_queue,
+		            (const u8 *const *)resampled_buf, resampled_samples, &next_audio_pts);
+
+		av_freep(resampled_buf);
+		av_freep(&resampled_buf);
+
+		if (ret < 0 && ret != AVERROR(EAGAIN)) {
+			error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
+			goto end;
+		}
+	}
+
+	if (ret != AVERROR_EOF) {
+		error("Failed to flush audio decoder: %s\n", av_err2str(ret));
+		goto end;
+	}
+
+	/* Flush the encoder and the container format. */
+	if ((ret = format_write_audio_frame(out_audio_fmt_ctx, audio_enc, resampled_queue, NULL, 0,
+	                                    &next_audio_pts)) < 0) {
+	        error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
 		goto end;
 	}
 
