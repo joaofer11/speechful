@@ -86,9 +86,9 @@ static inline i64 tb2ms(struct AVRational timebase, i64 n)
 	return ret;
 }
 
-static inline i64 secs2tb(struct AVRational timebase, i64 secs)
+static inline i64 ms2tb(struct AVRational timebase, i64 ms)
 {
-	i64 ret = av_rescale_q(secs, (struct AVRational){1, 1000}, timebase);
+	i64 ret = av_rescale_q(ms, (struct AVRational){1, 1000}, timebase);
 	return ret;
 }
 
@@ -575,7 +575,7 @@ int main(int argc, const char **argv)
 		if ((ret = av_seek_frame(
 		               in_audio_fmt_ctx,
 		               in_audio_st->index,
-		               secs2tb(in_audio_st->time_base, sub_time_in_ms.start),
+		               ms2tb(in_audio_st->time_base, sub_time_in_ms.start),
 		               AVSEEK_FLAG_BACKWARD)) < 0) {
 			error("Failed to sync audio with subtitle: %s\n", av_err2str(ret));
 			goto end;
