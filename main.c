@@ -195,18 +195,16 @@ end:
 
 int main(int argc, const char **argv)
 {
-	const char *in_audio_filepath = argv[1], *out_audio_filepath = argv[2];
-	struct AVFormatContext *in_audio_fmt_ctx, *out_audio_fmt_ctx;
-	struct AVStream *in_audio_st, *out_audio_st;
-	struct AVCodecContext *audio_dec, *audio_enc;
-	struct SwrContext *resampler;
-	struct AVAudioFifo *resampled_queue;
+	const char *in_audio_filepath = argv[1], *out_audio_filepath = argv[2], *sub_filepath = argv[3];
+	struct AVFormatContext *sub_fmt_ctx = NULL, *in_audio_fmt_ctx = NULL, *out_audio_fmt_ctx = NULL;
+	struct AVStream *sub_st = NULL, *in_audio_st = NULL, *out_audio_st = NULL;
+	struct AVCodecContext *audio_dec = NULL, *audio_enc = NULL;
+	struct SwrContext *resampler = NULL;
+	struct AVAudioFifo *resampled_queue = NULL;
 	int ret;
 
-	in_audio_fmt_ctx = NULL;
 	if ((ret = format_open_input(&in_audio_fmt_ctx, in_audio_filepath)) < 0) {
-		error("%s: failed to open media file: %s\n",
-		      in_audio_filepath, av_err2str(ret));
+		error("%s: failed to open media file: %s\n", in_audio_filepath, av_err2str(ret));
 		goto end;
 	}
 
@@ -221,7 +219,55 @@ int main(int argc, const char **argv)
 
 	in_audio_st = in_audio_fmt_ctx->streams[ret];
 
-	audio_dec = NULL;
+	/* We got a subtitle file? */
+	if (argc - 1 >= 3) {
+		if ((ret = format_open_input(&sub_fmt_ctx, sub_filepath)) < 0) {
+			error("%s: failed to open media file: %s\n", sub_filepath, av_err2str(ret));
+			goto end;
+		}
+
+		if (sub_fmt_ctx->nb_streams != 1) {
+			error("%s: inavalid subtitle media file.\n");
+			error("Expected only one stream but got %d.\n", sub_fmt_ctx->nb_streams);
+			goto end;
+		}
+
+		if (sub_fmt_ctx->streams[0]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE) {
+			error("%s: inavalid subtitle media file.\n");
+			error("Found only one stream of type %s\n",
+			      av_get_media_type_string(sub_fmt_ctx->streams[0]->codecpar->codec_type));
+			goto end;
+		}
+
+		sub_st = sub_fmt_ctx->streams[0];
+	} else {
+		warn("No subtitle file was provided.\n");
+		warn("Using file '%s' instead.\n", in_audio_filepath);
+
+		if ((ret = choose_stream(in_audio_fmt_ctx->streams, in_audio_fmt_ctx->nb_streams,
+		                         AVMEDIA_TYPE_SUBTITLE)) < 0) {
+			if (ret == AVERROR_STREAM_NOT_FOUND)
+				error("%s: no subtitle streams found.\n", in_audio_filepath);
+			else
+				error("%s: failed to choose subtitle stream: %s\n", in_audio_filepath, av_err2str(ret));
+			goto end;
+		}
+
+		sub_st = in_audio_fmt_ctx->streams[ret];
+
+		/*
+		 * Processing audio and subtitle from the same container sucks.
+		 * For that reason, we will always have a different context for the subtitle,
+		 * even if it was found inside the same container as the input audio.
+		 */
+		if ((ret = format_open_input(&sub_fmt_ctx, in_audio_filepath)) < 0) {
+			error("%s: failed to open media file: %s\n", in_audio_filepath, av_err2str(ret));
+			goto end;
+		}
+
+		sub_filepath = in_audio_filepath;
+	}
+
 	if ((ret = codec_open_decoder(&audio_dec, in_audio_st->codecpar)) < 0) {
 		error("%s: failed to open decoder: %s\n",
 		      avcodec_get_name(in_audio_st->codecpar->codec_id),
@@ -236,7 +282,6 @@ int main(int argc, const char **argv)
 	 * This is necessary so we can properly record some codec settings of
 	 * the audio track that will be embedded into the container format.
 	 */
-	audio_enc = NULL;
 	ret = codec_open_audio_encoder(
 		&audio_enc,
 		AV_CODEC_ID_MP3,
@@ -286,7 +331,6 @@ int main(int argc, const char **argv)
 
 	/* The output MP3 media file is all set. */
 
-	resampler = NULL;
 	if ((ret = resampler_open(&resampler, audio_enc, audio_dec)) < 0) {
 		error("Failed to initialize audio resampler: %s\n", av_err2str(ret));
 		goto end;
@@ -313,6 +357,9 @@ end:
 			avio_closep(&out_audio_fmt_ctx->pb);
 		avformat_free_context(out_audio_fmt_ctx);
 	}
+
+	if (sub_fmt_ctx)
+		avformat_close_input(&sub_fmt_ctx);
 
 	if (audio_dec)
 		avcodec_free_context(&audio_dec);
