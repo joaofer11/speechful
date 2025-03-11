@@ -18,6 +18,15 @@
 typedef uint8_t u8;
 typedef int64_t i64;
 
+struct parsed_argv {
+	const char *src_audio_filepath;
+	const char *dst_audio_filepath;
+	const char *sub_filepath;
+	i64 sub_padding_left_in_ms;
+	i64 sub_padding_right_in_ms;
+	int audio_quality;
+};
+
 struct range {
 	i64 start;
 	i64 end;
@@ -46,6 +55,77 @@ static void warn(const char *msg, ...)
 	va_end(va);
 }
 
+static int parse_argv(struct parsed_argv *parsed, const char *const *argv, int n)
+{
+	int i;
+
+	memset(parsed, 0, sizeof(struct parsed_argv));
+
+	/* WARNING!: Undefined behavior is occurring if user tries to use '$HOME' or '~'. */
+
+	for (i = 1; i < n; ++i) {
+		const char *arg = argv[i];
+
+		if (arg[0] != '-' || arg[1] != '-') {
+			if (!parsed->src_audio_filepath)
+				parsed->src_audio_filepath = arg;
+			continue;
+		}
+
+		if (strncmp(arg, "--sub=", 6) == 0 && !parsed->sub_filepath) {
+			parsed->sub_filepath = arg + 6;
+		} else if (strncmp(arg, "--out=", 6) == 0 && !parsed->dst_audio_filepath) {
+			parsed->dst_audio_filepath = arg + 6;
+		} else if (strncmp(arg, "--sub-padding-left=", 19) == 0
+		           && !parsed->sub_padding_left_in_ms) {
+			double n;
+			if (sscanf(arg, "%lf", &n) == 1) {
+				parsed->sub_padding_left_in_ms = n * 1000;
+			} else {
+				error("Invalid argument: %s\n", arg);
+				exit(1);
+			}
+		} else if (strncmp(arg, "--sub-padding-right=", 20) == 0
+		           && !parsed->sub_padding_right_in_ms) {
+			double n;
+			if (sscanf(arg, "%lf", &n) == 1) {
+				parsed->sub_padding_right_in_ms = n * 1000;
+			} else {
+				error("Invalid argument: %s\n", arg);
+				exit(1);
+			}
+		} else if (strncmp(arg, "--audio-quality=", 16) == 0
+		           && !parsed->audio_quality) {
+			char choice[6];
+
+			if (sscanf(arg, "--audio-quality=%s", choice) == 1) {
+				int i;
+				const char *options[] = {"low", "medium", "high"};
+				for (i = 0; i < 3; ++i) {
+					if (strcmp(choice, options[i]) == 0)
+						break;
+				}
+
+				if (i == 3) {
+					error("Invalid argument: %s\n", arg);
+					error("The allowed quality options are: %s, %s and %s.\n",
+					      options[0], options[1], options[2]);
+					exit(1);
+				}
+
+				parsed->audio_quality = i + 1;
+			} else {
+				error("Invalid argument: %s\n", arg);
+				exit(1);
+			}
+		} else {
+			error("Invalid argument: %s\n", arg);
+			exit(1);
+		}
+	}
+
+	return 0;
+}
 static int extract_audio_region(u8 ***dst, const u8 *const *src, int samples,
                                 int channels, enum AVSampleFormat sample_fmt,
                                 struct range length, struct range region)
@@ -53,9 +133,9 @@ static int extract_audio_region(u8 ***dst, const u8 *const *src, int samples,
 	int skip, extract;
 	int ret;
 
-	assert(region.start >= length.start && region.end <= length.end);
 	assert(length.end - length.start > 0);
 	assert(region.end - region.start > 0);
+	assert(region.start >= length.start && region.end <= length.end);
 
 	{
 		i64 whole = length.end - length.start;
@@ -400,8 +480,7 @@ end:
 
 int main(int argc, const char **argv)
 {
-	/* TODO?: Parse the argv. Some arguments will be important. */
-	const char *in_audio_filepath = argv[1], *out_audio_filepath = argv[2], *sub_filepath = argv[3];
+	struct parsed_argv parsed_argv;
 	struct AVFormatContext *sub_fmt_ctx = NULL, *in_audio_fmt_ctx = NULL, *out_audio_fmt_ctx = NULL;
 	struct AVStream *sub_st = NULL, *in_audio_st = NULL, *out_audio_st = NULL;
 	struct AVCodecContext *audio_dec = NULL, *audio_enc = NULL;
@@ -413,26 +492,27 @@ int main(int argc, const char **argv)
 	i64 next_audio_pts = 0;
 	int ret;
 
-	if ((ret = format_open_input(&in_audio_fmt_ctx, in_audio_filepath)) < 0) {
-		error("%s: failed to open media file: %s\n", in_audio_filepath, av_err2str(ret));
+	parse_argv(&parsed_argv, argv, argc);
+
+	if ((ret = format_open_input(&in_audio_fmt_ctx, parsed_argv.src_audio_filepath)) < 0) {
+		error("%s: failed to open media file: %s\n", parsed_argv.src_audio_filepath, av_err2str(ret));
 		goto end;
 	}
 
 	if ((ret = choose_stream(in_audio_fmt_ctx->streams, in_audio_fmt_ctx->nb_streams,
 	                         AVMEDIA_TYPE_AUDIO)) < 0) {
 	        if (ret == AVERROR_STREAM_NOT_FOUND)
-	        	error("%s: no audio streams found.\n", in_audio_filepath);
+	        	error("%s: no audio streams found.\n", in_audio_fmt_ctx->url);
 		else
-			error("%s: failed to choose audio stream: %s\n", in_audio_filepath, av_err2str(ret));
+			error("%s: failed to choose audio stream: %s\n", parsed_argv.src_audio_filepath, av_err2str(ret));
 		goto end;
 	}
 
 	in_audio_st = in_audio_fmt_ctx->streams[ret];
 
-	if (argc - 1 >= 3) {
-		/* We got a subtitle file. */
-		if ((ret = format_open_input(&sub_fmt_ctx, sub_filepath)) < 0) {
-			error("%s: failed to open media file: %s\n", sub_filepath, av_err2str(ret));
+	if (parsed_argv.sub_filepath) {
+		if ((ret = format_open_input(&sub_fmt_ctx, parsed_argv.sub_filepath)) < 0) {
+			error("%s: failed to open media file: %s\n", parsed_argv.sub_filepath, av_err2str(ret));
 			goto end;
 		}
 
@@ -452,14 +532,14 @@ int main(int argc, const char **argv)
 		sub_st = sub_fmt_ctx->streams[0];
 	} else {
 		warn("No subtitle file was provided.\n");
-		warn("Using file '%s' instead.\n", in_audio_filepath);
+		warn("Using file '%s' instead.\n", parsed_argv.src_audio_filepath);
 
 		if ((ret = choose_stream(in_audio_fmt_ctx->streams, in_audio_fmt_ctx->nb_streams,
 		                         AVMEDIA_TYPE_SUBTITLE)) < 0) {
 			if (ret == AVERROR_STREAM_NOT_FOUND)
-				error("%s: no subtitle streams found.\n", in_audio_filepath);
+				error("%s: no subtitle streams found.\n", parsed_argv.src_audio_filepath);
 			else
-				error("%s: failed to choose subtitle stream: %s\n", in_audio_filepath, av_err2str(ret));
+				error("%s: failed to choose subtitle stream: %s\n", parsed_argv.src_audio_filepath, av_err2str(ret));
 			goto end;
 		}
 
@@ -470,12 +550,10 @@ int main(int argc, const char **argv)
 		 * For that reason, we will always have a different context for the subtitle,
 		 * even if it was found inside the same container as the input audio.
 		 */
-		if ((ret = format_open_input(&sub_fmt_ctx, in_audio_filepath)) < 0) {
-			error("%s: failed to open media file: %s\n", in_audio_filepath, av_err2str(ret));
+		if ((ret = format_open_input(&sub_fmt_ctx, parsed_argv.src_audio_filepath)) < 0) {
+			error("%s: failed to open media file: %s\n", parsed_argv.src_audio_filepath, av_err2str(ret));
 			goto end;
 		}
-
-		sub_filepath = in_audio_filepath;
 	}
 
 	if ((ret = codec_open_decoder(&audio_dec, in_audio_st->codecpar)) < 0) {
@@ -500,20 +578,19 @@ int main(int argc, const char **argv)
 		goto end;
 	}
 
-	out_audio_fmt_ctx = NULL;
-	if ((ret = avformat_alloc_output_context2(&out_audio_fmt_ctx, NULL, NULL, out_audio_filepath)) < 0) {
-		error("%s: failed to open media file: %s\n", out_audio_filepath, av_err2str(ret));
+	if ((ret = avformat_alloc_output_context2(&out_audio_fmt_ctx, NULL, NULL, parsed_argv.dst_audio_filepath)) < 0) {
+		error("%s: failed to open media file: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 		goto end;
 	}
 
 	if (!(out_audio_fmt_ctx->oformat->flags & AVFMT_NOFILE)
-	    && (ret = avio_open(&out_audio_fmt_ctx->pb, out_audio_filepath, AVIO_FLAG_WRITE)) < 0) {
-		error("%s: failed to open media file: %s\n", out_audio_filepath, av_err2str(ret));
+	    && (ret = avio_open(&out_audio_fmt_ctx->pb, out_audio_fmt_ctx->url, AVIO_FLAG_WRITE)) < 0) {
+		error("%s: failed to open media file: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 		goto end;
 	}
 
 	if (!(out_audio_st = avformat_new_stream(out_audio_fmt_ctx, NULL))) {
-		error("%s: failed to attach audio track: out of memory.\n", out_audio_filepath);
+		error("%s: failed to attach audio track: out of memory.\n", out_audio_fmt_ctx->url);
 		goto end;
 	}
 
@@ -527,7 +604,7 @@ int main(int argc, const char **argv)
 	out_audio_st->time_base.den = audio_enc->sample_rate;
 
 	if ((ret = avformat_write_header(out_audio_fmt_ctx, NULL)) < 0) {
-		error("%s: failed to open media file: %s\n", out_audio_filepath, av_err2str(ret));
+		error("%s: failed to open media file: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 		goto end;
 	}
 
@@ -653,7 +730,7 @@ int main(int argc, const char **argv)
 				av_freep(&resampled_buf);
 
 				if (ret < 0 && ret != AVERROR(EAGAIN)) {
-					error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
+					error("%s: failed to write audio data: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 					goto end;
 				}
 			}
@@ -667,13 +744,13 @@ int main(int argc, const char **argv)
 		if (ret < 0) {
 			if (ret == AVERROR_EOF)
 				break;
-			error("%s: failed to read audio data: %s\n", in_audio_filepath, av_err2str(ret));
+			error("%s: failed to read audio data: %s\n", parsed_argv.src_audio_filepath, av_err2str(ret));
 			goto end;
 		}
 	}
 
 	if (ret != AVERROR_EOF) {
-		error("%s: failed to read subtitle data: %s\n", sub_filepath, av_err2str(ret));
+		error("%s: failed to read subtitle data: %s\n", parsed_argv.sub_filepath, av_err2str(ret));
 		goto end;
 	}
 
@@ -704,7 +781,7 @@ int main(int argc, const char **argv)
 		av_freep(&resampled_buf);
 
 		if (ret < 0 && ret != AVERROR(EAGAIN)) {
-			error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
+			error("%s: failed to write audio data: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 			goto end;
 		}
 	}
@@ -717,7 +794,7 @@ int main(int argc, const char **argv)
 	/* Flush the encoder and the container format. */
 	if ((ret = format_write_audio_data(out_audio_fmt_ctx, audio_enc, resampled_queue, NULL, 0,
 	                                    &next_audio_pts)) < 0) {
-	        error("%s: failed to write audio data: %s\n", out_audio_filepath, av_err2str(ret));
+	        error("%s: failed to write audio data: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 		goto end;
 	}
 
