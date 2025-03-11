@@ -86,7 +86,7 @@ static int parse_argv(struct parsed_argv *parsed, const char *const *argv, int n
 		} else if (strncmp(arg, "--sub-padding-left=", 19) == 0
 		           && !parsed->sub_padding_left_in_ms) {
 			double n;
-			if (sscanf(arg, "%lf", &n) == 1) {
+			if (sscanf(arg, "--sub-padding-left=%lf", &n) == 1) {
 				parsed->sub_padding_left_in_ms = n * 1000;
 			} else {
 				error("Invalid argument: %s\n", arg);
@@ -95,7 +95,7 @@ static int parse_argv(struct parsed_argv *parsed, const char *const *argv, int n
 		} else if (strncmp(arg, "--sub-padding-right=", 20) == 0
 		           && !parsed->sub_padding_right_in_ms) {
 			double n;
-			if (sscanf(arg, "%lf", &n) == 1) {
+			if (sscanf(arg, "--sub-padding-right=%lf", &n) == 1) {
 				parsed->sub_padding_right_in_ms = n * 1000;
 			} else {
 				error("Invalid argument: %s\n", arg);
@@ -700,8 +700,8 @@ int main(int argc, const char **argv)
 	while ((ret = read_packet(sub_fmt_ctx, sub_st->index, pkt)) == 0) {
 		struct range sub_time_in_ms = {0};
 
-		sub_time_in_ms.start = tb2ms(sub_st->time_base, pkt->pts) - 1000;
-		sub_time_in_ms.end   = tb2ms(sub_st->time_base, pkt->pts + pkt->duration) + 1000;
+		sub_time_in_ms.start = tb2ms(sub_st->time_base, pkt->pts) - parsed_argv.sub_padding_left_in_ms;
+		sub_time_in_ms.end   = tb2ms(sub_st->time_base, pkt->pts + pkt->duration) + parsed_argv.sub_padding_right_in_ms;
 
 		av_packet_unref(pkt);
 
