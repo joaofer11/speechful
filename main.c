@@ -126,6 +126,38 @@ static int parse_argv(struct parsed_argv *parsed, const char *const *argv, int n
 
 	return 0;
 }
+
+static char *new_filename_extension(const char *filename, int filename_len,
+                                    const char *ext,      int ext_len)
+{
+	char *new_filename;
+	int   new_len;
+	int   last_dot, basename_len;
+	int   i;
+
+	for (i = last_dot = 0; i < filename_len; ++i)
+		if (filename[i] == '.')
+			last_dot = i;
+
+	if (last_dot == 0) {
+		new_len = filename_len + ext_len + 2;
+		basename_len = filename_len;
+	} else {
+		new_len = last_dot + ext_len + 2;
+		basename_len = last_dot;
+	}
+
+	if (!(new_filename = av_malloc(new_len)))
+		return NULL;
+
+	memcpy(new_filename, filename, basename_len);
+	new_filename[basename_len] = '.';
+	memcpy(&new_filename[basename_len + 1], ext, ext_len);
+	new_filename[new_len - 1] = '\0';
+
+	return new_filename;
+}
+
 static int extract_audio_region(u8 ***dst, const u8 *const *src, int samples,
                                 int channels, enum AVSampleFormat sample_fmt,
                                 struct range length, struct range region)
@@ -578,10 +610,24 @@ int main(int argc, const char **argv)
 		goto end;
 	}
 
+	if (!parsed_argv.dst_audio_filepath)
+		parsed_argv.dst_audio_filepath = parsed_argv.src_audio_filepath;
+
+	parsed_argv.dst_audio_filepath = new_filename_extension(parsed_argv.dst_audio_filepath,
+	                                                        strlen(parsed_argv.dst_audio_filepath),
+	                                                        "mp3", 3);
+	if (!parsed_argv.dst_audio_filepath) {
+		error("Out of memory.\n");
+		goto end;
+	}
+
 	if ((ret = avformat_alloc_output_context2(&out_audio_fmt_ctx, NULL, NULL, parsed_argv.dst_audio_filepath)) < 0) {
 		error("%s: failed to open media file: %s\n", out_audio_fmt_ctx->url, av_err2str(ret));
 		goto end;
 	}
+
+	/* The function above performs `av_strdup()`, so we can safely free the string. */
+	av_freep(&parsed_argv.dst_audio_filepath);
 
 	if (!(out_audio_fmt_ctx->oformat->flags & AVFMT_NOFILE)
 	    && (ret = avio_open(&out_audio_fmt_ctx->pb, out_audio_fmt_ctx->url, AVIO_FLAG_WRITE)) < 0) {
