@@ -12,6 +12,10 @@
 #include <libavutil/avutil.h>
 #include <libavutil/audio_fifo.h>
 
+#define AUDIO_QUALITY_LOW    1
+#define AUDIO_QUALITY_MEDIUM 2
+#define AUDIO_QUALITY_HIGH   3
+
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define codec_supports(c, what) ((c)->capabilities & (what))
 
@@ -54,6 +58,9 @@ static void warn(const char *msg, ...)
 	av_vlog(NULL, AV_LOG_WARNING, msg, va);
 	va_end(va);
 }
+
+/* TODO: make the docs. */
+static void usage(void) {}
 
 static int parse_argv(struct parsed_argv *parsed, const char *const *argv, int n)
 {
@@ -594,20 +601,32 @@ int main(int argc, const char **argv)
 		      av_err2str(ret));
 	}
 
-	/* TODO: Let the user choose the quality of audio: low, medium or high. */
-	ret = codec_open_audio_encoder(
-		&audio_enc,
-		AV_CODEC_ID_MP3,
-	        (struct audio_encoder_settings){
-			.channels    = 2,
-			.sample_rate = 48000,
-			.bit_rate    = 256000,
-			.sample_fmt  = AV_SAMPLE_FMT_S16P
-	        });
-	if (ret < 0) {
-		error("%s: failed to open encoder: %s\n",
-		      avcodec_get_name(AV_CODEC_ID_MP3), av_err2str(ret));
-		goto end;
+	{
+		struct audio_encoder_settings settings = {0};
+
+		settings.channels   = 2;
+		settings.sample_fmt = AV_SAMPLE_FMT_S16P;
+
+		switch (parsed_argv.audio_quality) {
+		default:
+		case AUDIO_QUALITY_LOW:
+			settings.sample_rate = 44100;
+			settings.bit_rate    = 64000;
+			break;
+		case AUDIO_QUALITY_MEDIUM:
+			settings.sample_rate = 44100;
+			settings.bit_rate    = 128000;
+			break;
+		case AUDIO_QUALITY_HIGH:
+			settings.sample_rate = 48000;
+			settings.bit_rate    = 256000;
+			break;
+		}
+
+		if ((ret = codec_open_audio_encoder(&audio_enc, AV_CODEC_ID_MP3, settings)) < 0) {
+			error("%s: failed to open encoder: %s\n", avcodec_get_name(AV_CODEC_ID_MP3), av_err2str(ret));
+			goto end;
+		}
 	}
 
 	if (!parsed_argv.dst_audio_filepath)
